@@ -28,23 +28,33 @@ library(knitr) # to print table in R markdown
 library(kableExtra) # for making tables pretty/legible
 library(data.table)
 library(car) #for Anova not anova bc of unbalanced data
+library(EnvStats) # for stat_n_text()
 
 expchem <- read.csv("data_clean/waterchem_warmingxnutrient_171206.csv")
+#Added an "initial_NO3_mgL" column on 2018-02-15
+#from "2017_OleksyNutrientGrowthExperiment_WaterChemistry.xlsx"
+
 expchem$temperature <- as.factor(expchem$temperature)
 expchem <- as.tbl(expchem)
 glimpse(expchem)
 
 expchem <- expchem %>%
-  mutate(changeDOC_mgL=DOC_mgL-initial_DOC_mgL,
+  mutate(NH4_uM = (NH4_mgL * 1000) / 18.038508,
+         initial_NH4_uM = (initial_NH4_mgL * 1000) / 18.038508,
+         changeNH4_uM = initial_NH4_uM - NH4_uM,
+         changeDOC_mgL=DOC_mgL-initial_DOC_mgL,
          changeTDN_uM=initial_TDN_uM-TDN_uM,
          changePO4_uM=initial_PO4_uM-PO4_uM,
          changeNH4_mgL=initial_NH4_mgL-NH4_mgL,
+         changeNO3_mgL=initial_NO3_mgL-NO3_mgL,
+         percNO3uptake = (initial_NO3_mgL-NO3_mgL)/initial_NO3_mgL * 100,
          percTDNuptake = (initial_TDN_uM-TDN_uM)/initial_TDN_uM * 100,
          percPO4uptake = (initial_PO4_uM-PO4_uM)/initial_PO4_uM * 100,
-         TDNuptake_dailyrate = changeTDN_uM/(8))
+         TDNuptake_dailyrate = changeTDN_uM/8,
+         NO3uptake_dailyrate = changeNO3_mgL/8)
   
 expchem_trim <- expchem %>%
-  select(sample_id, temperature, treatment, tempxtrt, rep, chl_a_phyto,changeDOC_mgL, changePO4_uM, changeTDN_uM, changePO4_uM, changeNH4_mgL, percTDNuptake, percPO4uptake,TDNuptake_dailyrate, DOC_mgL, NH4_mgL)
+  select(sample_id, temperature, treatment, tempxtrt, rep, chl_a_phyto,changeDOC_mgL, changePO4_uM, changeTDN_uM, changePO4_uM, changeNH4_mgL, percTDNuptake, percPO4uptake,TDNuptake_dailyrate,NO3uptake_dailyrate,DOC_mgL, NH4_mgL, changeNO3_mgL, percNO3uptake, NH4_uM, changeNH4_uM)
 
 expchem_changesummary <- expchem %>%
   group_by(tempxtrt, treatment, temperature) %>%
@@ -52,16 +62,24 @@ expchem_changesummary <- expchem %>%
             sdchangeDOC_mgL=sd(changeDOC_mgL),
             meanchangeTDN_uM=mean(changeTDN_uM),
             sdchangeTDN_uM=sd(changeTDN_uM),
+            meanchangeNO3_mgL=mean(changeNO3_mgL),
+            sdchangeNO3_mgL=sd(changeNO3_mgL),
             meanchangePO4_uM=mean(changePO4_uM),
             sdchangePO4_uM=sd(changePO4_uM),
             meanchangeNH4_mgL=mean(changeNH4_mgL),
             sdchangeNH4_mgL=sd(changeNH4_mgL),
+            meanchangeNH4_uM=mean(changeNH4_uM),
+            sdchangeNH4_uM=sd(changeNH4_uM),
             meanphytochla=mean(chl_a_phyto),
             sdphytochla=sd(chl_a_phyto),
             meanpercTDNuptake=mean(percTDNuptake),
             sdpercTDNuptake=sd(percTDNuptake),
+            meanpercNO3uptake=mean(percNO3uptake),
+            sdpercNO3uptake=sd(percNO3uptake),
             meanTDNuptake_dailyrate=mean(TDNuptake_dailyrate),
             sdTDNuptake_dailyrate=sd(TDNuptake_dailyrate),
+            meanNO3uptake_dailyrate=mean(NO3uptake_dailyrate),
+            sdNO3uptake_dailyrate=sd(NO3uptake_dailyrate),            
             n= n()) %>%
   arrange(temperature)
 expchem_changesummary
@@ -75,6 +93,9 @@ expchem_changesummary$treatment <- factor(expchem_changesummary$treatment, level
                                                'NP'))
 expchem_trim$treatment <- factor(expchem_trim$treatment, levels=c('C','N','P',
                                                'NP'))
+
+trtcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E") #treatment colors
+tempcolors <- c( "#3166A9", "#40A339","#DE0019") #treatment colors
 ```
 
 
@@ -84,8 +105,8 @@ expchem_trim$treatment <- factor(expchem_trim$treatment, levels=c('C','N','P',
 
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
-#### TDN uptake - Data table summary
-```{r data table summary all treatments and nutrients TDN, echo=FALSE, message=FALSE, warning=FALSE}
+#### TDN uptake rates and % assimilated - Data table summary
+```{r data table summary all treatments and nutrients TDN, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 expchem_changesummary %>%
   select(treatment, temperature, meanchangeTDN_uM,sdchangeTDN_uM, n) %>%
@@ -93,48 +114,35 @@ expchem_changesummary %>%
   kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = F, position="left", font_size=12)
 ```
 
-####TDN uptake - Descriptive statistics and plots
+####TDN uptake rates and % assimilated - Descriptive statistics and plots
 Here we have some summary statistics for TDN uptake. First we are looking at change in TDN from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. 
-```{r histograms of each group TDN, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group TDN, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 
 Desc(changeTDN_uM ~ temperature, data=expchem_trim, digits=1, plotit=TRUE)
 Desc(changeTDN_uM ~ treatment, data=expchem_trim, digits=1, plotit=TRUE)
 
-library(lattice)
-
-histogram(~ changeTDN_uM | temperature, 
-          data=expchem_trim,
-          layout=c(1,3),
-          col="#3166A9",
-          main="Change in TDN by Temperature")
-histogram(~ changeTDN_uM | treatment, 
-          data=expchem_trim,
-          layout=c(1,4),
-          col="#3166A9",
-          main="Change in TDN by Nutrient Treatment")
+# library(lattice)
+# 
+# histogram(~ changeTDN_uM | temperature, 
+#           data=expchem_trim,
+#           layout=c(1,3),
+#           col="#3166A9",
+#           main="Change in TDN by Temperature")
+# histogram(~ changeTDN_uM | treatment, 
+#           data=expchem_trim,
+#           layout=c(1,4),
+#           col="#3166A9",
+#           main="Change in TDN by Nutrient Treatment")
 
 boxplot(changeTDN_uM ~ temperature * treatment, data=expchem_trim)
-ggsave("boxplot.png")
+# ggsave("boxplot.png")
 
 ```
 
 ```{r TDN data visualization}
-# Change stripchart colors by groups
-ggplot(expchem_trim, aes(x=temperature, y=changeTDN_uM, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-    geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
 
-ggplot(expchem_trim, aes(x=temperature, y=changeTDN_uM, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-  labs(x="Temperature Treatment",y="Nitrogen Uptake (uM)")+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_bw(base_size=16)
-
-trtcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E") #treatment colors
-TDN_uptakerate <- ggplot(expchem_changesummary, aes(x=treatment, y=meanTDNuptake_dailyrate, fill=treatment)) + theme_bw()+
+ggplot(expchem_changesummary, aes(x=treatment, y=meanTDNuptake_dailyrate, fill=treatment)) + theme_bw()+
    geom_bar(color="black",stat="identity", position="dodge") +
   scale_fill_manual(values=trtcolors,
                     name="Nutrient\namendment",
@@ -144,62 +152,45 @@ TDN_uptakerate <- ggplot(expchem_changesummary, aes(x=treatment, y=meanTDNuptake
                 position=position_dodge(0.9))+
   coord_cartesian(ylim=c(0,8))+
   scale_y_continuous(breaks=seq(0,8,1))+
-  theme(axis.text.x = element_text(colour = "black", size = 40), axis.title.y=element_text(size=36, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 30), axis.title.x=element_text(size=36, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 30), legend.title=element_text(size=36, face="bold"),
-        plot.title=element_text(size=40, face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        legend.key.size = unit(3, 'lines'),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank(),
-        strip.background =element_rect(fill="white",linetype = 0),
-        strip.text = element_text(colour = 'black', size=28))+
     facet_wrap( ~ temperature , ncol=3, scales="free")+
   # geom_hline(yintercept=66) +
   # annotate("text",1,66,vjust=-1,label="  Starting [TDN] in N & N+P treatments")+
   # geom_hline(yintercept=18, color="black", linetype="dashed")+
   # annotate("text",0.8,18,vjust=-1,label="Background [TDN]")+
-  labs(x="",y=" [uM N/day]", title="Dissolved inorganic N uptake rate\n")
-TDN_uptakerate
+  labs(x="",y=" [uM N/day]", title="Dissolved inorganic N uptake rate")
+
 # ggsave("TDN_uptakerate.png", width=16, height=9.5,units="in")
 
-trtcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E") #treatment colors
-TDN_uptakerate_boxplot <- ggplot(expchem_trim, aes(x=temperature, y=TDNuptake_dailyrate, fill=treatment)) +
-  geom_boxplot()+
-  stat_boxplot(geom ='errorbar') +
-  scale_fill_manual(values=trtcolors,
-                    name="Nutrient\nTreatment",
-                    labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
-  coord_cartesian(ylim=c(0,8))+
-  scale_y_continuous(breaks=seq(0, 8, 1))+
-  theme(axis.text.x = element_text(colour = "black", size = 40), axis.title.y=element_text(size=36, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 30), axis.title.x=element_text(size=36, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 30), legend.title=element_text(size=36, face="bold"),
-        legend.key.size = unit(3, 'lines'),
-        plot.title=element_text(size=40,face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank())+
-  labs(x="Incubation temperature",y="[uM/day]", title="Dissolved inorganic N uptake rate")
-TDN_uptakerate_boxplot
+# TDM uptake boxplot
+
+# ggplot(expchem_trim, aes(x=temperature, y=TDNuptake_dailyrate, fill=treatment)) +
+#   geom_boxplot()+
+#   stat_boxplot(geom ='errorbar') +
+#   scale_fill_manual(values=trtcolors,
+#                     name="Nutrient\nTreatment",
+#                     labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
+#   coord_cartesian(ylim=c(0,8))+
+#   scale_y_continuous(breaks=seq(0, 8, 1))+
+#   labs(x="Incubation temperature",y="[uM/day]", title="Dissolved inorganic N uptake rate")
+
 # ggsave("TDN_uptakerate_boxplot.png", width=16, height=9.5,units="in")
 
 
 
-#What percentage of N was taken up
-ggplot(expchem_trim, aes(x=treatment, y=percTDNuptake, color=treatment)) +
-     geom_boxplot(position=position_dodge(0.8))+
-    geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)+
-  facet_wrap( ~ temperature, ncol=3, scales="free")+
-  labs(x="Nutrient Treatment",y="Percent of Initial TDN assimilated")
+#BOXPLOT What percentage of N was taken up
+# ggplot(expchem_trim, aes(x=treatment, y=percTDNuptake, color=treatment)) +
+#      geom_boxplot(position=position_dodge(0.8))+
+#     geom_jitter(position=position_jitter(0.2))+
+#   scale_color_manual(values=trtcolors)+
+#   theme_bw()+
+#   facet_wrap( ~ temperature, ncol=3, scales="free")+
+#   labs(x="Nutrient Treatment",y="Percent of Initial TDN assimilated")
 
 #Bar plot of % N taken up
-expcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E")
-percNuptake <- ggplot(expchem_changesummary, aes(x=treatment, y=meanpercTDNuptake, fill=treatment)) + theme_bw()+
+
+ggplot(expchem_changesummary, aes(x=treatment, y=meanpercTDNuptake, fill=treatment)) + theme_bw()+
    geom_bar(color="black",stat="identity", position="dodge") +
-  scale_fill_manual(values=expcolors,
+  scale_fill_manual(values=trtcolors,
                     name="Nutrient\nTreatment\n",
                     labels=c("Control\n", "Nitrogen\n", "Phosphorus\n", "Both (N & P)\n"))+
   geom_errorbar(aes(ymin=meanpercTDNuptake-sdpercTDNuptake, ymax=meanpercTDNuptake+sdpercTDNuptake),
@@ -207,36 +198,25 @@ percNuptake <- ggplot(expchem_changesummary, aes(x=treatment, y=meanpercTDNuptak
                 position=position_dodge(0.9))+
   coord_cartesian(ylim=c(0,100))+
   scale_y_continuous(breaks=seq(0,100,10))+
-  theme(axis.text.x = element_text(colour = "black", size = 28), axis.title.y=element_text(size=30, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 28), axis.title.x=element_text(size=30, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 28), legend.title=element_text(size=30, face="bold"),
-        plot.title=element_text(size=30, face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank(),
-        strip.background =element_rect(fill="white"),
-        strip.text = element_text(colour = 'black', size=28))+
     facet_wrap( ~ temperature, ncol=3, scales="free")+
   # geom_hline(yintercept=66) +
   # annotate("text",1,66,vjust=-1,label="  Starting [TDN] in N & N+P treatments")+
   # geom_hline(yintercept=18, color="black", linetype="dashed")+
   # annotate("text",0.8,18,vjust=-1,label="Background [TDN]")+
   labs(x="Temperature Treatment",y="% Assimilated", title="Percentage of nitrogen assimilated from experimental starting conditions")
-percNuptake
-ggsave("percNuptake.png", width=20, height=12,units="in")
+
+# ggsave("percNuptake.png", width=20, height=12,units="in")
 
 
 ```
 
 
-
-
-#### TDN uptake - ANOVA results - with intxn
+#### TDN uptake rates - ANOVA results - with intxn
 From our preliminary glance at the data, it appears there is an interaction between the temperature of the experiment and the nutrient treatment. In the N-only treatment,
 TDN uptake increased with temperature. Interesting, in the N+P nutrient treatment, almost all of the TDN was consumed in the experiment. The following two plots are interaction plots of by nutrient treatment and temperature treatment, respecitvely.
 
-
-```{r TDN ANOVA Type II, echo=FALSE}
+**Change in TDN - N uptake rates** 
+```{r TDN ANOVA Type II, echo=FALSE, tidy=TRUE}
 TDN_Model1 <- lm(changeTDN_uM ~  temperature * treatment, data=expchem_trim)
 library(emmeans) #Estimated Marginal Means
 emmip(TDN_Model1, temperature ~ treatment)
@@ -250,34 +230,26 @@ Anova(TDN_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 #This approach is therefore valid in the presence of significant interactions.
 #http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
 
-
-TDN_uptake_Model1 <- lm(percTDNuptake ~ temperature * treatment, data=expchem_trim)
-emmip(TDN_uptake_Model1, temperature ~ treatment)
-emmip(TDN_uptake_Model1, treatment~temperature)
-Anova(TDN_uptake_Model1, type=3, contrasts=c("constr.sum","contr.poly")) 
-
-
 ```
 
-Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F=46.453, p<0.0001). The test for the main effect of nutrient treatment is significant (p<0.0001) but the test for the main effect of temperature alone is not significant (p=0.13).  After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
+> Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F=46.453, p<0.0001). The test for the main effect of nutrient treatment is significant (p<0.0001) but the test for the main effect of temperature alone is not significant (p=0.13).  After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r TDN qqplots and residuals, echo=FALSE}
+```{r TDN qqplots and residuals, echo=FALSE, tidy=TRUE}
 TDNresults <- lm(changeTDN_uM ~ treatment * temperature, data=expchem_trim)
 summary(TDNresults)
 qqnorm(TDNresults$res)
 plot(TDNresults$fitted,TDNresults$res,xlab="Fitted",ylab="Residuals")
 leveneTest(changeTDN_uM ~ treatment * temperature,data=expchem_trim)
 
-library(interplot)
 
 ```
 
-Neither plot indicates a significant violation of normality assumptions. We're good here.
+> Neither plot indicates a significant violation of normality assumptions. We're good here.
 
-####TDN uptake - Pairwise comparisons
+####TDN uptake rates - Pairwise comparisons
 
 Pairwise comparsions for each level of temperature
-```{r TDN pairwise trt x temp , echo=FALSE}
+```{r TDN pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_TDN_trtxtemp <- emmeans(TDN_Model1, pairwise ~ treatment | temperature)
 #Pairwise comparsions for each level of temperature
@@ -285,71 +257,356 @@ emms_TDN_trtxtemp
 ```
 
 Pairwise comparsions for each level of nutrient treatment
-```{r TDN pairwise temp x trt, echo=FALSE}
+```{r TDN pairwise temp x trt, echo=FALSE, tidy=TRUE}
 emms_TDN_tempxtrt <- emmeans(TDN_Model1, pairwise ~ temperature | treatment)
 #Pairwise comparsions for each level of nutrient treatment
 emms_TDN_tempxtrt
+```
 
-# cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
+#### TDN % assimilated - ANOVA results - with intxn
+**Percent N uptake**
+```{r, echo=FALSE, tidy=TRUE, tidy=TRUE}
+#First, it is necessary to set the contrasts option in R. Because the multi-way ANOVA model is over-parameterised
+#it is necessary to choose a contrasts setting that sums to zero, otherwise the ANOVA analysis will give incorrect
+#results with respect to the expected hypothesis. (The default contrasts type does not satisfy this requirement.)
+#Doing a Type III test. This type tests for the presence of a main effect after the other main effect and interaction.
+#This approach is therefore valid in the presence of significant interactions.
+#http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
+TDN_uptake_Model1 <- lm(percTDNuptake ~ temperature * treatment, data=expchem_trim)
+emmip(TDN_uptake_Model1, temperature ~ treatment)
+emmip(TDN_uptake_Model1, treatment~temperature)
+Anova(TDN_uptake_Model1, type=3, contrasts=c("constr.sum","contr.poly")) 
+```
 
-cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
-cld(emms_TDN_tempxtrt)
+> In contrast to the previous model, if we look at %N assimilated, there is a siginificant effect of temperature and nutrients as well as an interaction between temperature and nutrients. 
+
+```{r, echo=FALSE, tidy=TRUE, tidy=TRUE}
+
+summary(TDN_uptake_Model1)
+qqnorm(TDN_uptake_Model1$res)
+plot(TDN_uptake_Model1$fitted,TDN_uptake_Model1$res,xlab="Fitted",ylab="Residuals")
+leveneTest(percTDNuptake ~ treatment * temperature,data=expchem_trim)
+
+```
+
+> Percent N uptake model meets the assumptions of normality, too.
+
+####TDN % assimilated - Pairwise comparisons
+
+Pairwise comparsions for each level of temperature
+```{r, echo=FALSE, tidy=TRUE}
+library(emmeans) #Estimated Marginal Means
+emms_TDN_trtxtemp <- emmeans(TDN_uptake_Model1, pairwise ~ treatment | temperature)
+#Pairwise comparsions for each level of temperature
+emms_TDN_trtxtemp
+```
+
+> At 8 degrees, all nutrient treatments are significantly different from each other. At 12 degrees, all nutrients treatments are significantly different from each other except C vs P. At 16 degrees, all nutrients treatments are significantly different from each other except C vs P.
+
+Pairwise comparsions for each level of nutrient treatment
+```{r, echo=FALSE, tidy=TRUE}
+emms_TDN_tempxtrt <- emmeans(TDN_uptake_Model1, pairwise ~ temperature | treatment)
+#Pairwise comparsions for each level of nutrient treatment
+emms_TDN_tempxtrt
+```
+
+> In the control, there is a different between 8 vs 12 and 12 vs 16, but not 8 vs 16. In the N treatment, there is a difference between 8 vs. 16 and 12 vs. 16, but not 8 vs. 12.
+In the P treatment, there are no differences across temperatures. In the NP treatment, there is only a significant difference between 8 vs 12. 8 vs 16 is marginally significant (p=0.07)
+
+### Data Visualization - NO3 uptake
+
+Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
+
+#### NO3 uptake - Data table summary
+```{r data table summary all treatments and nutrients NO3, echo=FALSE, message=FALSE, warning=FALSE, tidy=TRUE}
+
+expchem_changesummary %>%
+  select(treatment, temperature, meanchangeNO3_mgL,sdchangeNO3_mgL, n) %>%
+  kable("html", digits=3, caption="Incubation experiment nutrient data summary: means, standard deviation, and number of replicates per treatment") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = F, position="left", font_size=12)
+```
+
+####NO3 uptake - Descriptive statistics and plots
+Here we have some summary statistics for NO3 uptake. First we are looking at change in NO3 from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. 
+```{r histograms of each group NO3, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
+library(DescTools)
+
+Desc(changeNO3_mgL ~ temperature, data=expchem_trim, digits=1, plotit=TRUE)
+Desc(changeNO3_mgL ~ treatment, data=expchem_trim, digits=1, plotit=TRUE)
+
+boxplot(changeNO3_mgL ~ temperature * treatment, data=expchem_trim)
+
+```
+> Similar results to change in TDN
+
+
+
+```{r NO3 data visualization}
+
+#BAR PLOT - Change in NO3
+ggplot(expchem_changesummary, aes(x=treatment, y=meanchangeNO3_mgL, fill=treatment)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanchangeNO3_mgL-sdchangeNO3_mgL, ymax=meanchangeNO3_mgL+sdchangeNO3_mgL),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y="", title="Change in NO3\n(initial - final concentration [mg/L])")+
+    theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+# ##BOX PLOT - Change in NO3
+# ggplot(expchem_trim, aes(x=temperature, y=changeNO3_mgL, color=treatment)) +
+#   geom_boxplot(position=position_dodge(0.8))+
+#   geom_jitter(position=position_jitter(0.2))+
+#       stat_n_text(size = 3) + 
+#   labs(x="Temperature Treatment",y="Change in NO3\n(initial - final concentration [mg/L])")+
+#   scale_color_manual(values=trtcolors)+
+#   facet_wrap(~treatment)+
+#   theme_bw(base_size=16)
+
+#BAR PLOT - Daily nitrate uptake rate
+ggplot(expchem_changesummary, aes(x=treatment, y=meanNO3uptake_dailyrate, fill=treatment)) + theme_bw()+
+  geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanNO3uptake_dailyrate-sdNO3uptake_dailyrate, ymax=meanNO3uptake_dailyrate+sdNO3uptake_dailyrate),
+                width=.2,
+                position=position_dodge(0.9))+
+  coord_cartesian(ylim=c(0,0.5))+
+  scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y=" [mg NO3/day]", title="Daily nitrate uptake rate")+
+    theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+##BOX PLOT - Daily nitrate uptake rate 
+
+# ggplot(expchem_trim, aes(x=treatment, y=NO3uptake_dailyrate, fill=treatment)) +
+#   geom_boxplot()+
+#   stat_boxplot(geom ='errorbar') +
+# 
+#   scale_fill_manual(values=trtcolors,
+#                     name="Nutrient\nTreatment",
+#                     labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
+#   coord_cartesian(ylim=c(0,0.5))+
+#   scale_y_continuous(breaks=seq(0,0.5,0.1))+
+#   labs(x="Incubation temperature",y="[uM/day]", title="Dissolved inorganic N uptake rate")+
+#     facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+#     theme_bw(base_size=16)
+
+# ggsave("NO3_uptakerate_boxplot.png", width=16, height=9.5,units="in")
+
+
+
+# #BOX PLOT - What percentage of N was taken up
+# ggplot(expchem_trim, aes(x=treatment, y=percNO3uptake, color=treatment)) +
+#      geom_boxplot(position=position_dodge(0.8))+
+#     geom_jitter(position=position_jitter(0.2))+
+#   scale_color_manual(values=trtcolors)+
+#   coord_cartesian(ylim=c(0,100))+
+#   scale_y_continuous(breaks=seq(0,100,10))+
+#   facet_wrap( ~ temperature, ncol=3)+
+#   labs(x="Nutrient Treatment",y="", title="Percent of Initial NO3 assimilated")+
+#   theme_bw(base_size=16)
+
+
+#BAR PLOT - What % NO3 taken up
+
+ggplot(expchem_changesummary, aes(x=treatment, y=meanpercNO3uptake, fill=treatment)) +
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\nTreatment\n",
+                    labels=c("Control\n", "Nitrogen\n", "Phosphorus\n", "Both (N & P)\n"))+
+  geom_errorbar(aes(ymin=meanpercNO3uptake-sdpercNO3uptake, ymax=meanpercNO3uptake+sdpercNO3uptake),
+                width=.2,
+                position=position_dodge(0.9))+
+  coord_cartesian(ylim=c(0,100))+
+  scale_y_continuous(breaks=seq(0,100,10))+
+  facet_wrap( ~ temperature, ncol=3, scales="free")+
+  labs(x="Temperature Treatment",y="% Assimilated", title="Percentage of nitrate assimilated")+
+  theme_bw()+
+    theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+
+```
+
+> This is actually really interesting to me. It seems that when the "system" is satured with N, there is an interaction with temperature: the higher the temperature, the more N is assimilated. However, when you add P along, N&P together, and no nutrients, almost all of the N is taken up. 
+
+```{r}
+#TO DO: worth doing some sort of analysis where we look how starting N:P ratio influences nitrate assimilation!!!
 ```
 
 
+#### NO3 uptake - ANOVA results - with intxn
+
+**Change in NO3**
+```{r NO3 ANOVA Type II, echo=FALSE, tidy=TRUE}
+NO3_Model1 <- lm(changeNO3_mgL ~  temperature * treatment -1, data=expchem_trim)
+library(emmeans) #Estimated Marginal Means
+emmip(NO3_Model1, temperature ~ treatment)
+emmip(NO3_Model1, treatment~temperature)
+Anova(NO3_Model1, type=3, contrasts=c("constr.sum","contr.poly")) 
+
+#First, it is necessary to set the contrasts option in R. Because the multi-way ANOVA model is over-parameterised
+#it is necessary to choose a contrasts setting that sums to zero, otherwise the ANOVA analysis will give incorrect
+#results with respect to the expected hypothesis. (The default contrasts type does not satisfy this requirement.)
+#Doing a Type III test. This type tests for the presence of a main effect after the other main effect and interaction.
+#This approach is therefore valid in the presence of significant interactions.
+#http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
+```
+> There is a significant effect of treatment on the change in NO3, and an interaction with temperature, but no effect of temperature alone. Same result we saw when we looked at TDN uptake takes or change in TDN from initial to end.
+
+```{r, echo=FALSE, tidy=TRUE}
+NO3results <- lm(changeNO3_mgL ~ treatment * temperature  -1 , data=expchem_trim)
+summary(NO3results)
+qqnorm(NO3results$res)
+plot(NO3results$fitted,NO3results$res,xlab="Fitted",ylab="Residuals")
+leveneTest(changeNO3_mgL ~ treatment * temperature,data=expchem_trim)
+```
+
+>After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too.  Doesn't meet the asummptions of normality. Humph. 
+
+**Percent NO3 uptake**
+```{r}
+NO3_uptake_Model1 <- lm(percNO3uptake ~ temperature * treatment -1, data=expchem_trim)
+emmip(NO3_uptake_Model1, temperature ~ treatment)
+emmip(NO3_uptake_Model1, treatment~temperature)
+Anova(NO3_uptake_Model1, type=3, contrasts=c("constr.sum","contr.poly")) 
+
+```
+
+>Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F=7.6899, p<0.0001). The test for the main effect of nutrient treatment is significant (F(3,59)=48.7603, p<0.0001) as is the main effect of temperature (F(2,59)=6.8206, p<0.001).  Pretty much same result we found when we looked at TDN % assimilated.
+
+```{r NO3 qqplots and residuals, echo=FALSE, tidy=TRUE}
+
+summary(NO3_uptake_Model1)
+qqnorm(NO3_uptake_Model1$res)
+plot(NO3_uptake_Model1$fitted,NO3_uptake_Model1$res,xlab="Fitted",ylab="Residuals")
+leveneTest(percNO3uptake ~ treatment * temperature,data=expchem_trim)
+```
+> Also doesn't really fit model assupmtions. However, I believe the TDN % assimilated model did, so might just want to present that instead. 
+
+
+####NO3 uptake - Pairwise comparisons
+
+Pairwise comparsions for each level of temperature
+```{r NO3 pairwise trt x temp , echo=FALSE, tidy=TRUE}
+library(emmeans) #Estimated Marginal Means
+emms_NO3_trtxtemp <- emmeans(NO3_Model1, pairwise ~ treatment | temperature)
+#Pairwise comparsions for each level of temperature
+emms_NO3_trtxtemp
+
+
+```
+
+> At 8 degrees, all pairwise comparisons are significantly different except C vs P. At 12 degrees, all pairwise comparisons are significantly different except C vs P. At 16 degrees, all pairwise comparisons are significantly different except C vs P. 
+
+Pairwise comparsions for each level of nutrient treatment
+```{r NO3 pairwise temp x trt, echo=FALSE, tidy=TRUE}
+emms_NO3_tempxtrt <- emmeans(NO3_Model1, pairwise ~ temperature | treatment)
+#Pairwise comparsions for each level of nutrient treatment
+emms_NO3_tempxtrt
+```
+
+> No differences amongst temperature treatments in the control. For the N treatment, all temperature comparisons are significantly different. No differences by temperature for P. For NP, 8 vs 12 and 8 vs 16 are significantly different, but not 12 vs 16. 
 
 ###Data Visualization - NH4
 
 ####NH4 release - Descriptive statistics and plots
 Here we have some summary statistics for NH4 at end of the experiment.  
-```{r histograms of each group NH4, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group NH4, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 
-Desc(NH4_mgL ~ temperature, data=expchem, digits=1, plotit=TRUE)
-Desc(NH4_mgL ~ treatment, data=expchem, digits=1, plotit=TRUE)
+Desc(NH4_uM ~ temperature, data=expchem, digits=1, plotit=TRUE)
+Desc(NH4_uM ~ treatment, data=expchem, digits=1, plotit=TRUE)
 
-library(lattice)
+# library(lattice)
+# 
+# histogram(~ NH4_uM | temperature, 
+#           data=expchem,
+#           layout=c(1,3),
+#           col="#3166A9",
+#           main="NH4 at end of experiment by Temperature")
+# histogram(~ NH4_uM | treatment, 
+#           data=expchem,
+#           layout=c(1,4),
+#           col="#3166A9",
+#           main="NH4 at end of experiment by Nutrient Treatment")
 
-histogram(~ NH4_mgL | temperature, 
-          data=expchem,
-          layout=c(1,3),
-          col="#3166A9",
-          main="NH4 at end of experiment by Temperature")
-histogram(~ NH4_mgL | treatment, 
-          data=expchem,
-          layout=c(1,4),
-          col="#3166A9",
-          main="NH4 at end of experiment by Nutrient Treatment")
-
-boxplot(NH4_mgL ~ temperature * treatment, data=expchem)
+boxplot(NH4_uM ~ temperature * treatment, data=expchem)
 # ggsave("boxplot.png")
 
 ```
 
-```{r NH4 data visualization}
-# Change stripchart colors by groups
-ggplot(expchem, aes(x=temperature, y=NH4_mgL, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-  labs(x="Temperature Treatment",y="Ammonia conc. at end (mg/L)")+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_bw(base_size=16)
-ggsave("NH4_end_bytemp.png", width=10, height=6,units="in")
+> Hmmm what's going on here? Lots of NH4 in the high N treatments but only at 8 and 12 degrees. Across all nutrient treatments, 16 degrees has the lowest NH4 concentrations at the end of the experiment. 
 
-ggplot(expchem, aes(x=treatment, y=NH4_mgL, color=temperature)) +
+```{r NH4 data visualization, echo=FALSE, tidy=TRUE}
+
+ggplot(expchem_changesummary, aes(x=treatment, y=meanchangeNH4_uM, fill=treatment)) + theme_bw()+
+  geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanchangeNH4_uM-sdchangeNH4_uM, ymax=meanchangeNH4_uM+sdchangeNH4_uM),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y="", title="Change in NH4\n(initial - final concentration [uM])")+
+    theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+ggplot(expchem_changesummary, aes(x=temperature, y=meanchangeNH4_uM, fill=temperature)) + theme_bw()+
+  geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=tempcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanchangeNH4_uM-sdchangeNH4_uM, ymax=meanchangeNH4_uM+sdchangeNH4_uM),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ treatment , ncol=2)+
+  labs(x="",y="", title="Change in NH4\n(initial - final concentration [uM])")+
+    theme(legend.position="bottom",
+      axis.text.x=element_blank())
+```
+
+> Huh. So if you look at change in NH4, it's a slightly different picture. All treatments started with the same initial concentration. In all of the N treatments, there was net release. In the NP at 16 degrees, there was release. Ammonification/mineralization of organic matter??
+
+
+```{r, echo=FALSE, tidy=TRUE}
+# BOX PLOT - by temperature treatment
+ggplot(expchem, aes(x=temperature, y=NH4_uM, color=treatment)) +
+   geom_boxplot(position=position_dodge(0.8))+
+  labs(x="Temperature Treatment",y="Ammonia conc. at end (mg/L)")+
+  scale_color_manual(values=trtcolors)+
+  theme_bw(base_size=16)
+# ggsave("NH4_end_bytemp.png", width=10, height=6,units="in")
+
+#BOX PLOT - BY nutrient treatment
+ggplot(expchem, aes(x=treatment, y=NH4_uM, color=temperature)) +
    geom_boxplot(position=position_dodge(0.8))+
   labs(x="Temperature Treatment",y="Ammonia conc. at end (mg/L)")+
   theme_bw(base_size=16)
-ggsave("NH4_end_bytrt.png", width=10, height=6,units="in")
+# ggsave("NH4_end_bytrt.png", width=10, height=6,units="in")
 
 
 ```
 
 
 #### NH4 / Ammonification? - ANOVA results - with intxn
-There is an effect of temperature alone and there is an effect of nutrient treatment alone and an interaction between temp*nutrients.
 
-```{r NH4 ANOVA Type II, echo=FALSE}
-NH4_Model1 <- lm(NH4_mgL ~  temperature * treatment -1 , data=expchem) #No intercept model 
+```{r NH4 ANOVA Type II, echo=FALSE, tidy=TRUE}
+NH4_Model1 <- lm(NH4_uM ~  temperature * treatment -1 , data=expchem) #No intercept model 
 library(emmeans) #Estimated Marginal Means
 emmip(NH4_Model1, temperature ~ treatment)
 emmip(NH4_Model1, treatment~temperature)
@@ -364,63 +621,62 @@ Anova(NH4_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 
 ```
 
-After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
+> There is an effect of temperature alone and there is an effect of nutrient treatment alone and an interaction between temp*nutrients.
 
-```{r NH4 qqplots and residuals, echo=FALSE}
+
+```{r NH4 qqplots and residuals, echo=FALSE, tidy=TRUE}
 summary(NH4_Model1)
 qqnorm(NH4_Model1$res)
 plot(NH4_Model1$fitted,NH4_Model1$res,xlab="Fitted",ylab="Residuals")
-leveneTest(NH4_mgL ~ treatment * temperature,data=expchem)
+leveneTest(NH4_uM ~ treatment * temperature -1,data=expchem)
 
 ```
 
-We don't exactly meet the assumptions of normality. 
+> We don't exactly meet the assumptions of normality. 
 
-```{r NH4 model log transformed, echo=FALSE}
-expchem <- data.frame(expchem, logNH4 = log10(expchem$NH4_mgL))
+**Try a log-transformation**
+```{r NH4 model log transformed, echo=FALSE, tidy=TRUE}
 
-NH4_Model2 <-lm(logNH4 ~  temperature * treatment -1 , data=expchem) #No intercept model 
+NH4_Model2 <-lm(log(NH4_uM) ~  treatment  * temperature -1 , data=expchem) #No intercept model 
 summary(NH4_Model2)
 emmip(NH4_Model2, temperature ~ treatment)
 emmip(NH4_Model2, treatment~temperature)
-Anova(NH4_Model2, type=3, contrasts=c("constr.sum","contr.poly")) 
+Anova(NH4_Model2, type=3, contrasts=c("constr.sum","contr.poly"))
+```
 
+> No effect of temperature alone. Effect of nutrients alone and a tempxnutrient interaction.
+
+```{r, echo=FALSE, tidy=TRUE}
 #Test for assumptions or normality
 summary(NH4_Model2)
 qqnorm(NH4_Model2$res)
 plot(NH4_Model2$fitted,NH4_Model2$res,xlab="Fitted",ylab="Residuals")
-leveneTest(logNH4 ~ treatment * temperature,data=expchem)
-
-
+leveneTest(log(NH4_uM) ~ treatment * temperature,data=expchem)
 ```
+
+> Log transformation helps
 
 ####NH4 / Ammonification? - Pairwise comparisons
 
 Pairwise comparsions for each level of temperature
-```{r NH4 pairwise trt x temp , echo=FALSE}
+```{r NH4 pairwise trt x temp , echo=FALSE, tidy= TRUE}
 library(emmeans) #Estimated Marginal Means
-emms_NH4_trtxtemp <- emmeans(NH4_Model1, pairwise ~ treatment | temperature)
+emms_NH4_trtxtemp <- emmeans(NH4_Model2, pairwise ~ treatment | temperature)
 #Pairwise comparsions for each level of temperature
 emms_NH4_trtxtemp
 ```
 
+> At 8 degrees, C vs N, N vs NP, and N vs P are different. At 12 degrees, (same result) C vs N, N vs NP, and N vs P are different. No differences at 16 degrees. 
+
 Pairwise comparsions for each level of nutrient treatment
-```{r NH4 pairwise temp x trt, echo=FALSE}
-emms_NH4_tempxtrt <- emmeans(NH4_Model1, pairwise ~ temperature | treatment)
+```{r NH4 pairwise temp x trt, echo=FALSE, tidy=TRUE}
+emms_NH4_tempxtrt <- emmeans(NH4_Model2, pairwise ~ temperature | treatment)
 #Pairwise comparsions for each level of nutrient treatment
 emms_NH4_tempxtrt
 
-# cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
-
-cld(emms_NH4_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
-cld(emms_NH4_tempxtrt)
 ```
 
-
-
-
-
-
+> No differences between controls across temperatures. Differences bteween 8 vs 16 and 12 vs 16 in the nitrogen treamtents. No differences across temperature in the NP treatment. No differences between P treatments across temperatures.
 
 
 ### Data Visualization - DOC exudation
@@ -428,7 +684,7 @@ cld(emms_NH4_tempxtrt)
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
 #### DOC exudation - Data table summary
-```{r data table summary all treatments and nutrients DOC, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients DOC, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 expchem_changesummary %>%
   select(treatment, temperature, meanchangeDOC_mgL, sdchangeDOC_mgL, n) %>%
@@ -437,43 +693,41 @@ expchem_changesummary %>%
 ```
 
 ####DOC exudation - Descriptive statistics and plots
-Here we have some summary statistics for DOC exudation. First we are looking at change in DOC from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. Due to the way I calculated these values (Initial DOC minus final DOC), negative numbers here mean there is MORE dissolved organic carbon at the end of the experiment than the begining.
+Here we have some summary statistics for DOC exudation. First we are looking at change in DOC from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. Due to the way I calculated these values (final minus initial), bigger numbers here mean there is MORE dissolved organic carbon at the end of the experiment than the begining. All experimental units had more DOC at the end than the beginning, but the magnitude varied by temperature x nutrient combo.
 
-```{r histograms of each group DOC, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group DOC, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(changeDOC_mgL ~ temperature, data=expchem_trim, digits=1, plotit=TRUE)
 Desc(changeDOC_mgL ~ treatment, data=expchem_trim, digits=1, plotit=TRUE)
 
-library(lattice)
-
-histogram(~ changeDOC_mgL | temperature, 
-          data=expchem_trim,
-          layout=c(1,3),
-          col="#3166A9",
-          main="Change in DOC by Temperature")
-histogram(~ changeDOC_mgL | treatment, 
-          data=expchem_trim,
-          layout=c(1,4),
-          col="#3166A9",
-          main="Change in DOC by Nutrient Treatment")
-
-boxplot(changeDOC_mgL ~ temperature * treatment, data=expchem_trim)
-
+# library(lattice)
+# 
+# histogram(~ changeDOC_mgL | temperature, 
+#           data=expchem_trim,
+#           layout=c(1,3),
+#           col="#3166A9",
+#           main="Change in DOC by Temperature")
+# histogram(~ changeDOC_mgL | treatment, 
+#           data=expchem_trim,
+#           layout=c(1,4),
+#           col="#3166A9",
+#           main="Change in DOC by Nutrient Treatment")
 
 # Change stripchart colors by groups
-ggplot(expchem_trim, aes(x=temperature, y=changeDOC_mgL, color=treatment)) +
+ggplot(expchem_trim, aes(x=treatment, y=changeDOC_mgL, color=treatment)) +
    geom_boxplot(position=position_dodge(0.8))+
     geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
+  scale_color_manual(values=trtcolors)+
+  facet_wrap(.~temperature)+
+  theme_bw()
+```
 
+```{r, echo=FALSE, tidy=TRUE, fig.width=10}
 
-
-#Bar plot of net DOC release 
-expcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E")
-netDOCrelease <- ggplot(expchem_changesummary, aes(x=treatment, y=meanchangeDOC_mgL, fill=treatment)) + theme_bw()+
+#Bar plot - Net DOC release
+ggplot(expchem_changesummary, aes(x=treatment, y=meanchangeDOC_mgL, fill=treatment)) + theme_bw()+
    geom_bar(color="black",stat="identity", position="dodge") +
-  scale_fill_manual(values=expcolors,
+  scale_fill_manual(values=trtcolors,
                     name="Nutrient\nTreatment",
                     labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
   geom_errorbar(aes(ymin=meanchangeDOC_mgL-sdchangeDOC_mgL, ymax=meanchangeDOC_mgL+sdchangeDOC_mgL),
@@ -481,58 +735,28 @@ netDOCrelease <- ggplot(expchem_changesummary, aes(x=treatment, y=meanchangeDOC_
                 position=position_dodge(0.9))+
   coord_cartesian(ylim=c(0,5))+
   scale_y_continuous(breaks=seq(0,5,1))+
-  theme(axis.text.x = element_text(colour = "black", size = 24), axis.title.y=element_text(size=24, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 24), axis.title.x=element_text(size=24, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 24), legend.title=element_text(size=24, face="bold"),
-        plot.title=element_text(size=30, face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank(),
-        strip.background =element_rect(fill="white"),
-        strip.text = element_text(colour = 'black', size=24))+
     facet_wrap( ~ temperature, ncol=3, scales="free")+
   # geom_hline(yintercept=66) +
   # annotate("text",1,66,vjust=-1,label="  Starting [TDN] in N & N+P treatments")+
   # geom_hline(yintercept=18, color="black", linetype="dashed")+
   # annotate("text",0.8,18,vjust=-1,label="Background [TDN]")+
   labs(x="Temperature Treatment",y="Net change in DOC (mg/L)", title="")
-netDOCrelease
-ggsave("DOCrelease.png", width=10, height=5,units="in")
 
-#Box plot with means comparisons
+# ggsave("DOCrelease.png", width=10, height=5,units="in")
 
-compare_means(changeDOC_mgL ~ treatment ,  data = expchem_trim, group.by="temperature")
-DOC_comparisons <- list(c("C","P"),c("C","NP"), c("P", "NP"),c("N","P"))
-DOCrelease_boxplot <- ggplot(expchem_trim, aes(x=temperature, y=changeDOC_mgL, fill=treatment)) +
-  geom_boxplot()+
-  stat_boxplot(geom ='errorbar') +
-  scale_fill_manual(values=trtcolors,
-                    name="Nutrient\nTreatment",
-                    labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
-  coord_cartesian(ylim=c(0,5))+
-  scale_y_continuous(breaks=seq(0, 5, 1))+
-  theme(axis.text.x = element_text(colour = "black", size = 40), axis.title.y=element_text(size=36, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 30), axis.title.x=element_text(size=36, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 30), legend.title=element_text(size=36, face="bold"),
-        legend.key.size = unit(3, 'lines'),
-        plot.title=element_text(size=40,face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank())+
-    stat_compare_means(comparisons=DOC_comparisons, label="p.signif", group.by="temperature")+
-  stat_compare_means(label.y=1)
-  labs(x="Incubation temperature",y="Net change in DOC (mg/L)")
-DOCrelease_boxplot
+
 
 ```
 
+> Does this match what we see in the pairwise comparisons? 
 
 #### DOC exudation - ANOVA results - with intxn
-From our preliminary glance at the data, it looks like at lower temperatures, there is more DOC released (still pondering the ecological significance of that... fueling microbial loop?). At higher temperatures, it looks like there is less DOC at the end of the experiment. 
+From our preliminary glance at the data, it looks like at lower temperatures, there is more DOC released (still pondering the ecological significance of that... fueling microbial loop?). At higher temperatures, it looks like there is less DOC at the end of the experiment, but it varies by nutrient treatment. 
 
 
-```{r DOC ANOVA Type II, echo=FALSE}
-DOC_Model1 <- lm(changeDOC_mgL ~  temperature * treatment, data=expchem_trim)
+**Log transformed DOC model**
+```{r DOC ANOVA Type II, echo=FALSE, tidy=TRUE}
+DOC_Model1 <- lm(log(changeDOC_mgL) ~  temperature * treatment -1, data=expchem_trim)
 library(emmeans) #Estimated Marginal Means
 emmip(DOC_Model1, temperature ~ treatment)
 emmip(DOC_Model1, treatment~temperature)
@@ -546,20 +770,21 @@ Anova(DOC_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 #http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
 ```
 
-Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a marginally significant interaction effect (F(6,59)=1.9887, p=0.08164). The test for the main effect of temperature treatment is significant (p=0.02217) but the test for the main effect of nutrient treatment alone is not significant (p=0.11959).  After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
+> Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a  significant interaction effect (F(6,59)=3.4983, p=0.005007). The test for the main effect of temperature treatment is significant (p=< 0.0001) but the test for the main effect of nutrient treatment alone is not significant (p=0.330755).  After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r DOC qqplots and residuals, echo=FALSE}
+**Log transformed DOC**
+```{r DOC qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(DOC_Model1$res)
 plot(DOC_Model1$fitted,DOC_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(changeDOC_mgL ~ treatment * temperature,data=expchem_trim)
 ```
 
-It looks like there is just one potential outlier in the data. Overall, neither plot indicates a significant violation of normality assumptions. We're good here.
+> Overall, neither plot indicates a significant violation of normality assumptions. We're good here.
 
-```{r DOC model without outlier, echo=FALSE}
+```{r DOC model without outlier, echo=FALSE, tidy=TRUE}
 expchem_trim_DOCoutlier <- expchem_trim %>%
-  filter(changeDOC_mgL > -3)
-DOC_Model2 <- lm(changeDOC_mgL ~  temperature * treatment , data=expchem_trim_DOCoutlier)
+  filter(changeDOC_mgL < 5)
+DOC_Model2 <- lm(changeDOC_mgL ~  temperature * treatment -1, data=expchem_trim_DOCoutlier)
 library(emmeans) #Estimated Marginal Means
 emmip(DOC_Model2, temperature ~ treatment)
 emmip(DOC_Model2, treatment~temperature)
@@ -569,42 +794,60 @@ plot(DOC_Model2$fitted,DOC_Model2$res,xlab="Fitted",ylab="Residuals")
 leveneTest(changeDOC_mgL ~ treatment * temperature,data=expchem_trim_DOCoutlier)
 ```
 
-If we take the one super high DOC value out, we meet the assumptions of normality. Not sure if this is really ethical though.
+> If we take the one super high DOC value out and don't log transform, we meet the assumptions of normality. Not sure if this is really ethical though. Which sample was that??
+
+```{r, tidy=TRUE}
+expchem_trim %>%
+  select(sample_id, changeDOC_mgL) %>%
+  filter(changeDOC_mgL > 5)
+```
 
 ####DOC exudation - Pairwise comparisons
 
-Pairwise comparsions for each level of temperature. At 12 degrees, we see significnant differences between C - NP, N - P, and N - NP. At 16 degress, there is a difference between C - P, C-NP, N-P. There are no differences at 8 degrees. 
-```{r DOC pairwise trt x temp , echo=FALSE}
+
+```{r DOC pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_DOC_trtxtemp <- emmeans(DOC_Model2, pairwise ~ treatment | temperature)
 emms_DOC_trtxtemp
 
+```
+
+>Pairwise comparsions for each level of temperature. At 12 degrees, we see significnant differences between C - NP, N - P, and N - NP. At 16 degress, there is a difference between C - P, C-NP, N-P, N-NP. There are no differences at 8 degrees. 
+
+```{r, echo=FALSE, tidy=TRUE}
+#Box plot with means comparisons
+compare_means(changeDOC_mgL ~ treatment ,  data = expchem_trim_DOCoutlier, group.by="temperature")
+DOC_comparisons <- list(c("C","P"),c("C","NP"), c("P", "NP"),c("N","P"))
+ggplot(expchem_trim_DOCoutlier, aes(x=treatment, y=changeDOC_mgL, fill=treatment)) +
+  geom_boxplot()+
+  stat_boxplot(geom ='errorbar') +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\nTreatment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
+  # coord_cartesian(ylim=c(0,5))+
+  # scale_y_continuous(breaks=seq(0, 5, 1))+
+  stat_compare_means(comparisons=DOC_comparisons, label="p.signif", group.by="temperature")+
+  stat_compare_means(label.y=0.25)+
+  facet_wrap(~temperature)+
+  labs(x="Incubation temperature",y="Net change in DOC (mg/L)")
+
+
+```
+
+```{r, echo=FALSE, tidy=TRUE}
 emms_DOC_tempxtrt <- emmeans(DOC_Model2, pairwise ~ temperature | treatment)
 emms_DOC_tempxtrt
 #Pairwise comparsions for each level of temperature
 ```
 
+> In the control, there is a difference between 8 and 12 and 12 and 16. In the N trt, there is a difference btwn 8 vs 12 and 12 vs 16. In the P trt, there is a difference between 8 vs 12, and 8 vs 16. In the NP trt, there is a difference between 8 vs 12, and 8 vs 16. 
 
-
-Pairwise comparsions for each level of nutrient treatment. In the control, there is a difference between 12-16 degrees. In the P treatment, there is a difference between 8-12, and 8-16. And in the NP treatment, there is a difference between 8-12, and 8-16. 
-```{r DOC pairwise temp x trt, echo=FALSE}
-emms_DOC_tempxtrt <- emmeans(DOC_Model2, pairwise ~ temperature | treatment)
-emms_DOC_tempxtrt
-#Pairwise comparsions for each level of nutrient treatment
-# cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
-#cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
-```
 
 ####DOC exudation - Plot of temperature effect
 ```{r temperature effect}
-DOCrelease_summary <- expchem %>%
-  group_by(temperature) %>%
-  summarize(meanchangeDOC_mgL=mean(changeDOC_mgL),
-            sdchangeDOC_mgL=sd(changeDOC_mgL),
-            n= n()) %>%
-  arrange(temperature)
-DOCrelease_summary
 
+
+#Box plots all nutrient treatments aggregated by temperature
 compare_means(changeDOC_mgL ~ temperature ,  data = expchem_trim)
 temp_DOC_comparisons <- list(c("8","12"),c("8","16"))
 DOCrelease_temp_boxplot <- ggplot(expchem_trim, aes(x=temperature, y=changeDOC_mgL, fill=temperature)) +
@@ -616,28 +859,20 @@ DOCrelease_temp_boxplot <- ggplot(expchem_trim, aes(x=temperature, y=changeDOC_m
   #                   labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
   coord_cartesian(ylim=c(0,5))+
   scale_y_continuous(breaks=seq(0, 5, 1), name="Net change DOC (mg/L)")+
-  theme(axis.text.x = element_text(colour = "black", size = 24), axis.title.y=element_text(size=24, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 24), axis.title.x=element_text(size=24, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 24), legend.title=element_text(size=24, face="bold"),
-        legend.key.size = unit(3, 'lines'),
-        legend.position="none",
-        plot.title=element_text(size=24,face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank())+
-    stat_compare_means(comparisons=temp_DOC_comparisons, label="p.signif")+
+  stat_compare_means(comparisons=temp_DOC_comparisons, label="p.signif")+
   stat_compare_means(label.y=5)+
   labs(x="Temperature")
 DOCrelease_temp_boxplot
 # ggsave("DOCchange_bytemp.png", width=9.5, height=5,units="in")
 ```
 
+
 ### Data Visualization - PO4 uptake/release
 
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
 #### PO4 uptake/release - Data table summary
-```{r data table summary all treatments and nutrients PO4, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients PO4, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 expchem_changesummary %>%
   select(treatment, temperature, meanchangePO4_uM, sdchangePO4_uM, n) %>%
@@ -648,34 +883,22 @@ expchem_changesummary %>%
 ####PO4 uptake/release - Descriptive statistics and plots
 Here we have some summary statistics for PO4 uptake/release. First we are looking at change in PO4 from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. Due to the way I calculated these values (Initial PO4 minus final PO4), negative numbers here mean there is MORE phosphate at the end of the experiment than the begining. Positive number indiciate uptake... slightly counterintuitive.
 
-```{r histograms of each group PO4, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group PO4, echo=FALSE, message=FALSE, warning=FALSE, tidy=TRUE}
 library(DescTools)
 Desc(changePO4_uM ~ temperature, data=expchem_trim, digits=1, plotit=TRUE)
 Desc(changePO4_uM ~ treatment, data=expchem_trim, digits=1, plotit=TRUE)
 
-library(lattice)
-
-histogram(~ changePO4_uM | temperature, 
-          data=expchem_trim,
-          layout=c(1,3),
-          col="#3166A9",
-          main="Change in PO4 by Temperature")
-histogram(~ changePO4_uM | treatment, 
-          data=expchem_trim,
-          layout=c(1,4),
-          col="#3166A9",
-          main="Change in PO4 by Nutrient Treatment")
 # Change stripchart colors by groups
-ggplot(expchem_trim, aes(x=temperature, y=changePO4_uM, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-    geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
+# ggplot(expchem_trim, aes(x=temperature, y=changePO4_uM, color=treatment)) +
+#    geom_boxplot(position=position_dodge(0.8))+
+#     geom_jitter(position=position_jitter(0.2))+
+#   scale_color_manual(values=trtcolors)+
+#   theme_classic2(base_size=16)
 
 
-PO4_change <- ggplot(expchem_changesummary, aes(x=treatment, y=meanchangePO4_uM, fill=treatment)) + theme_bw()+
-   geom_bar(color="black",stat="identity", position="dodge") +
-  scale_fill_manual(values=expcolors,
+ggplot(expchem_changesummary, aes(x=treatment, y=meanchangePO4_uM, fill=treatment)) + theme_bw()+
+  geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
                     name="Nutrient\nTreatment\n",
                     labels=c("Control\n", "Nitrogen\n", "Phosphorus\n", "Both (N & P)\n"))+
   geom_errorbar(aes(ymin=meanchangePO4_uM-sdchangePO4_uM, ymax=meanchangePO4_uM+sdchangePO4_uM),
@@ -683,23 +906,14 @@ PO4_change <- ggplot(expchem_changesummary, aes(x=treatment, y=meanchangePO4_uM,
                 position=position_dodge(0.9))+
   coord_cartesian(ylim=c(-10,10))+
   scale_y_continuous(breaks=seq(-10,10,1))+
-  theme(axis.text.x = element_text(colour = "black", size = 28), axis.title.y=element_text(size=30, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 28), axis.title.x=element_text(size=30, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 28), legend.title=element_text(size=30, face="bold"),
-        plot.title=element_text(size=30, face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank(),
-        strip.background =element_rect(fill="white"),
-        strip.text = element_text(colour = 'black', size=28))+
-    facet_wrap( ~ temperature, ncol=3, scales="free")+
+  facet_wrap( ~ temperature, ncol=3, scales="free")+
   # geom_hline(yintercept=66) +
   # annotate("text",1,66,vjust=-1,label="  Starting [TDN] in N & N+P treatments")+
   # geom_hline(yintercept=18, color="black", linetype="dashed")+
   # annotate("text",0.8,18,vjust=-1,label="Background [TDN]")+
   labs(x="Temperature Treatment",y=" [uM PO4]", title="Change in PO4 from start to end of experiment")
-PO4_change
-ggsave("PO4_change.png", width=20, height=12,units="in")
+
+# ggsave("PO4_change.png", width=20, height=12,units="in")
 
 ```
 
@@ -708,8 +922,8 @@ ggsave("PO4_change.png", width=20, height=12,units="in")
 From our preliminary glance at the data, it looks like PO4 was released (averaging over all nutrient treatments). Interestingly, in the P & NP treatments, there was PO4 uptake compared to C & N treatments, where there was more PO4 leftover in the begining of the experiment than there were at the beginning.  
 
 
-```{r PO4 ANOVA Type II, echo=FALSE}
-PO4_Model1 <- lm(changePO4_uM ~  temperature * treatment, data=expchem_trim)
+```{r PO4 ANOVA Type II, echo=FALSE, tidy=TRUE}
+PO4_Model1 <- lm(changePO4_uM ~  temperature * treatment -1, data=expchem_trim)
 library(emmeans) #Estimated Marginal Means
 emmip(PO4_Model1, temperature ~ treatment)
 emmip(PO4_Model1, treatment~temperature)
@@ -725,7 +939,7 @@ Anova(PO4_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 
 Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a marginally significant interaction effect (F(6,59)=9.6131, p<0.0001). The tests for the main effects of temperature and nutrient treatments are BOTH significant. After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r PO4 qqplots and residuals, echo=FALSE}
+```{r PO4 qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(PO4_Model1$res)
 plot(PO4_Model1$fitted,PO4_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(changePO4_uM ~ treatment * temperature,data=expchem_trim)
@@ -735,7 +949,7 @@ PO4 uptake does not pass the Levene's test and the Normal Q-Q plot doesn't look 
 
 
 
-```{r PO4 ANOVA Type II Model 2, echo=FALSE}
+```{r PO4 ANOVA Type II Model 2, echo=FALSE, tidy=TRUE}
 expchem_trim <- expchem_trim %>%
   mutate(log_changePO4_uM = log10(changePO4_uM+1-min(changePO4_uM)))
 
@@ -747,28 +961,29 @@ plot(PO4_Model2$fitted,PO4_Model2$res,xlab="Fitted",ylab="Residuals")
 leveneTest(log_changePO4_uM ~ treatment * temperature,data=expchem_trim)
 ```
 
-
-This is slightly better, but there is still quite a bit spread in our residuals which is making us fail the Levene test. Might need to think of a workaround here.
+ > This is slightly better, but there is still quite a bit spread in our residuals which is making us fail the Levene test. Might need to think of a workaround here. What if we look at % of P taken up or released? 
 
 ####PO4 uptake/release - Pairwise comparisons
 
-Pairwise comparsions for each level of temperature. Pretty much the only time we don't see a significant different between treatments is at 8 degree between NP & P, 12 degrees between C & N and P & NP, and 16 degrees between C & N, and P & NP. 
-```{r PO4 pairwise trt x temp , echo=FALSE}
+
+```{r PO4 pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_PO4_trtxtemp <- emmeans(PO4_Model2, pairwise ~ treatment | temperature)
 emms_PO4_trtxtemp
 #Pairwise comparsions for each level of temperature
 ```
 
-Pairwise comparsions for each level of nutrient treatment. In the control nutrient treatment, there is a different between 8 and 16 degrees and 12 and 16 degrees. In the nitrogen nutrient treatment, there is a statistically significant difference with temperature. In the P treatment, there is a statastically significant difference between 8 and 12 and 8 and 16, but not between 12 and 16. Finally, in the NP treatment, therre is a difference between 8 and 12 and 8 and 16, but not between 12 and 16. 
-```{r PO4 pairwise temp x trt, echo=FALSE}
+>Pairwise comparsions for each level of temperature. At 8 degrees, sig diff between C and all treatments, N vs P, and N vs NP. At 12 degrees, all combos are significant except C vs N and P vs NP.  At 16 degrees, sig diff between C vs P, C vs NP, N vs P, N vs NP. 
+
+
+ 
+```{r PO4 pairwise temp x trt, echo=FALSE, tidy=TRUE}
 emms_PO4_tempxtrt <- emmeans(PO4_Model2, pairwise ~ temperature | treatment)
 emms_PO4_tempxtrt
-#Pairwise comparsions for each level of nutrient treatment
-# cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
-#cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
+
 ```
 
+> Pairwise comparsions for each level of nutrient treatment. In the control nutrient treatment, there is a different between 8 and 16 degrees and 12 and 16 degrees. In the nitrogen nutrient treatment, there is a statistically significant difference with temperature. In the P treatment, there is a statastically significant difference between 8 and 12 and 8 and 16, but not between 12 and 16. Finally, in the NP treatment, therre is a difference between 8 and 12 and 8 and 16, but not between 12 and 16.
 
 #### PO4 uptake/release - Two-way ANOVA with Robust Estimation
 Tutorial found here: http://rcompanion.org/rcompanion/d_08a.html
@@ -776,7 +991,7 @@ More info on non-parametric tests and R packages here: https://journal.r-project
 
 First, Produce Huber M-estimators and confidence intervals by group
 NOT PRINTING AT THIS TIME
-```{r PO4 Huber M-estimators, echo=FALSE}
+```{r PO4 Huber M-estimators, echo=FALSE, tidy=TRUE}
 # library(WRS2)
 # # The est = "mom" option uses a modified M-estimator for the analysis.  To analyze using medians, use the est= "median" option in the pbad2way function in the WRS2 package.  To analyze using trimmed means, use the t2way function in the WRS2 package.
 # pbad2way(changePO4_uM ~  temperature * treatment, data=expchem_trim,
@@ -854,33 +1069,15 @@ NOT PRINTING AT THIS TIME
 ####PO4 concentrations experiment end - Descriptive statistics and plots
 Here we have some summary statistics for PO4 uptake/release. First we are looking at change in PO4 from start to end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. Due to the way I calculated these values (Initial PO4 minus final PO4), negative numbers here mean there is MORE phosphate at the end of the experiment than the begining. Positive number indiciate uptake... slightly counterintuitive.
 
-```{r histograms of each group PO4 2, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group PO4 2, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 expchem$temperature <- as.factor(expchem$temperature)
 Desc(PO4_uM ~ temperature, data=expchem, digits=1, plotit=TRUE)
 Desc(PO4_uM ~ treatment, data=expchem, digits=1, plotit=TRUE)
 
-library(lattice)
-
-histogram(~ changePO4_uM | temperature, 
-          data=expchem,
-          layout=c(1,3),
-          col="#3166A9",
-          main="Change in PO4 by Temperature")
-histogram(~ changePO4_uM | treatment, 
-          data=expchem,
-          layout=c(1,4),
-          col="#3166A9",
-          main="Change in PO4 by Nutrient Treatment")
-# Change stripchart colors by groups
-ggplot(expchem, aes(x=temperature, y=PO4_uM, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-    geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
 
 
-PO4_end_boxplot1 <- 
+
   ggplot(expchem, aes(x=temperature, y=PO4_uM, fill=treatment)) +
   geom_boxplot()+
   stat_boxplot(geom ='errorbar') +
@@ -890,20 +1087,11 @@ PO4_end_boxplot1 <-
                     labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
   # coord_cartesian(ylim=c(0,5))+
   # scale_y_continuous(breaks=seq(0, 5, 1))+
-  theme(axis.text.x = element_text(colour = "black", size = 24), axis.title.y=element_text(size=24, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 24), axis.title.x=element_text(size=24, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 24), legend.title=element_text(size=24, face="bold"),
-        legend.key.size = unit(3, 'lines'),
-        plot.title=element_text(size=24,face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank())+
   labs(x="Incubation temperature",y="PO4 end (uM)") 
-PO4_end_boxplot1
-ggsave("PO4_end_boxplot1.png", width=9, height=7,units="in")
+
+# ggsave("PO4_end_boxplot1.png", width=9, height=7,units="in")
 
 
-PO4_end_boxplot2 <- 
   ggplot(expchem, aes(x=treatment, y=PO4_uM, fill=temperature)) +
   geom_boxplot()+
   stat_boxplot(geom ='errorbar') +
@@ -913,17 +1101,10 @@ PO4_end_boxplot2 <-
   #                   labels=c("Control", "Nitrogen", "Phosphorus", "N&P"))+
   # coord_cartesian(ylim=c(0,5))+
   # scale_y_continuous(breaks=seq(0, 5, 1))+
-  theme(axis.text.x = element_text(colour = "black", size = 24), axis.title.y=element_text(size=24, vjust=1.2, face="bold"),
-        axis.text.y = element_text(colour = "black", size = 24), axis.title.x=element_text(size=24, vjust=-0.1, face="bold"),
-        legend.text = element_text(colour="black", size = 24), legend.title=element_text(size=24, face="bold"),
-        legend.key.size = unit(3, 'lines'),
-        plot.title=element_text(size=24,face="bold"),
-        panel.border = element_rect(size=1.0, fill=NA),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank())+
+
   labs(x="Treatment",y="PO4 end (uM)") 
-PO4_end_boxplot2
-ggsave("PO4_end_boxplot2.png", width=9, height=7,units="in")
+
+# ggsave("PO4_end_boxplot2.png", width=9, height=7,units="in")
 
 
 ```
@@ -935,7 +1116,7 @@ ggsave("PO4_end_boxplot2.png", width=9, height=7,units="in")
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
 #### Beaker Chla - Data table summary
-```{r data table summary all treatments and nutrients phyto, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients phyto, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 expchem_changesummary %>%
   select(treatment, temperature, meanphytochla, sdphytochla, n) %>%
@@ -946,30 +1127,26 @@ expchem_changesummary %>%
 ####Beaker Chla - Descriptive statistics and plots
 Here we have some summary statistics for Beaker Chla. First we are looking at how much chlorophyll a there was in the beaker at the end of experiment by TEMPERTURE and by TREATMENT separately. I've also plotted boxplots with individual points. Not sure where all these phytoplankton came from, since we used filtered lake water. 
 
-```{r histograms of each group chla, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group chla, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(chl_a_phyto ~ temperature, data=expchem_trim, digits=1, plotit=TRUE)
 Desc(chl_a_phyto ~ treatment, data=expchem_trim, digits=1, plotit=TRUE)
 
-library(lattice)
 
-histogram(~ chl_a_phyto | temperature, 
-          data=expchem_trim,
-          layout=c(1,3),
-          col="#3166A9",
-          main="Beaker water chlorophyll a by Temperature")
-histogram(~ chl_a_phyto | treatment, 
-          data=expchem_trim,
-          layout=c(1,4),
-          col="#3166A9",
-          main="Beaker water chlorophyll a by Nutrient Treatment")
 # Change stripchart colors by groups
-ggplot(expchem_trim, aes(x=temperature, y=chl_a_phyto, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.8))+
-    geom_jitter(position=position_jitter(0.2))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
+ggplot(expchem_trim, aes(x=temperature, y=chl_a_phyto, color=temperature)) +
+  geom_boxplot(position=position_dodge(0.8))+
+  geom_jitter(position=position_jitter(0.2))+
+  scale_color_manual(values=tempcolors)+
+  facet_wrap(~treatment)+
+  theme_bw()
 
+ggplot(expchem_trim, aes(x=treatment, y=chl_a_phyto, color=treatment)) +
+  geom_boxplot(position=position_dodge(0.8))+
+  geom_jitter(position=position_jitter(0.2))+
+  scale_color_manual(values=trtcolors)+
+  facet_wrap(~temperature)+
+  theme_bw()
 ```
 
 
@@ -977,8 +1154,8 @@ ggplot(expchem_trim, aes(x=temperature, y=chl_a_phyto, color=treatment)) +
 From our preliminary glance at the data, it doesn't look like there is much a difference in the means, although in the 8 degree treatments, the spread was quite wide. Comparing across nutrient treatments, NP has the highest mean chla with N as the runner up.
 
 
-```{r chla ANOVA Type II, echo=FALSE}
-Phyto_Chla_Model1 <- lm(chl_a_phyto ~  temperature * treatment, data=expchem_trim)
+```{r chla ANOVA Type II, echo=FALSE, tidy=TRUE}
+Phyto_Chla_Model1 <- lm(chl_a_phyto ~  temperature * treatment -1, data=expchem_trim)
 library(emmeans) #Estimated Marginal Means
 emmip(Phyto_Chla_Model1, temperature ~ treatment)
 emmip(Phyto_Chla_Model1, treatment~temperature)
@@ -992,23 +1169,23 @@ Anova(Phyto_Chla_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 #http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
 ```
 
-Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,59)=12.783, p<0.0001). The tests for the main effects of temperature is not significant, but the effect ot treatment is highly significant (F(3,59)=70.436, p<0.0001).
+> Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,59)=12.783, p<0.0001). The tests for the main effects of temperature is not significant, but the effect ot treatment is highly significant (F(3,59)=70.436, p<0.0001).
 
 After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r chla qqplots and residuals, echo=FALSE}
+```{r chla qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(Phyto_Chla_Model1$res)
 plot(Phyto_Chla_Model1$fitted,Phyto_Chla_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(chl_a_phyto ~ treatment * temperature,data=expchem_trim)
 ```
 
-Data fit the model assumptions. We can move on.
+> Data fit the model assumptions. We can move on.
 
 
 ####Beaker Chla - Pairwise comparisons
 
 Pairwise comparsions for each level of temperature. At 8 degrees, NP is different than C, N, and P. At 12 degrees, NP is different than C, N, and P. At 16 degrees, both N and NP are significantly different than the Control. N vs P and P versus NP are both significantly different from each other, but N and NP are not significantly different.
-```{r chla pairwise trt x temp , echo=FALSE}
+```{r chla pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_phyto_chla_trtxtemp <- emmeans(Phyto_Chla_Model1, pairwise ~ treatment | temperature)
 emms_phyto_chla_trtxtemp
@@ -1016,17 +1193,13 @@ emms_phyto_chla_trtxtemp
 ```
 
 Pairwise comparsions for each level of nutrient treatment. In the control nutrient treatment, there is a different between 8 and 16 degrees and 12 and 16 degrees. In the nitrogen nutrient treatment, there is a statistically significant difference with temperature. In the P treatment, there is a statastically significant difference between 8 and 12 and 8 and 16, but not between 12 and 16. Finally, in the NP treatment, therre is a difference between 8 and 12 and 8 and 16, but not between 12 and 16. 
-```{r chla pairwise temp x trt, echo=FALSE}
+```{r chla pairwise temp x trt, echo=FALSE, tidy=TRUE}
 emms_PO4_tempxtrt <- emmeans(PO4_Model2, pairwise ~ temperature | treatment)
 emms_PO4_tempxtrt
 #Pairwise comparsions for each level of nutrient treatment
 # cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
 #cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
 ```
-
-
-
-
 
 
 
@@ -1042,7 +1215,22 @@ glimpse(incubation)
 incubation <- incubation %>%
   mutate(NEP_ugcm2h = NEP_mgcm2h *1000,
          ER_ugcm2h = ER_mgcm2h * 1000,
-         GPP_ugcm2h = GPP_mgcm2h *1000)
+         GPP_ugcm2h = GPP_mgcm2h *1000) 
+
+#Which samples had positive ER? Actually impossible...
+incubation %>% 
+  filter(ER_ugcm2h > 0)
+#8C-1, 8C-2, 8C-3
+
+#Replace positive values with -0.1
+incubation <- incubation %>%
+  rename(ER_ugcm2h_old = ER_ugcm2h) %>% 
+  select(-ER_mgcm2h, -NEP_mgcm2h,GPP_mgcm2h ) %>% # get rid of mg columns
+  mutate(ER_ugcm2h = ER_ugcm2h_old) %>% #duplicate ER column
+  mutate(ER_ugcm2h = replace(ER_ugcm2h, ER_ugcm2h > 0, -0.1)) %>%
+  rename(NEP_ugcm2h_old = NEP_ugcm2h) %>%
+  mutate(NEP_ugcm2h = ER_ugcm2h + GPP_ugcm2h) #calculate NEP again (GPP + R)
+  
 
 incubation_summary <- incubation %>%
   group_by(treatment, temperature) %>%
@@ -1063,13 +1251,18 @@ incubation_summary$treatment <- factor(incubation_summary$treatment, levels=c('C
 incubation$temperature <- as.factor(incubation$temperature)
 incubation$treatment <- factor(incubation$treatment, levels=c('C','N','P',
                                                'NP'))
+
+trtcolors <- c("#40A339", "#3166A9", "#DE0019", "#82388E") #treatment colors
+tempcolors <- c( "#3166A9", "#40A339","#DE0019") #treatment colors
 ```
+
+
 ### Data Visualization - GPP (gross primary production)
 
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
 #### GPP - Data table summary
-```{r data table summary all treatments and nutrients GPP, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients GPP, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 incubation_summary %>%
   select(treatment, temperature, meanGPP, sdGPP, n) %>%
@@ -1080,29 +1273,26 @@ incubation_summary %>%
 ####GPP - Descriptive statistics and plots
 Here we have some summary statistics for GPP. First we are looking at GPP by TEMPERTURE and by TREATMENT separately.
 
-```{r histograms of each group GPP, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group GPP, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(GPP_ugcm2h ~ temperature, data=incubation, digits=1, plotit=TRUE)
 Desc(GPP_ugcm2h ~ treatment, data=incubation, digits=1, plotit=TRUE)
 
-library(lattice)
-
-histogram(~ GPP_ugcm2h | temperature, 
-          data=incubation,
-          layout=c(1,3),
-          col="#3166A9",
-          main="GPP by Temperature")
-histogram(~ GPP_ugcm2h | treatment, 
-          data=incubation,
-          layout=c(1,4),
-          col="#3166A9",
-          main="GPP by Nutrient Treatment")
 # Change stripchart colors by groups
-ggplot(incubation, aes(x=temperature, y=GPP_ugcm2h, color=treatment)) +
-   geom_boxplot(position=position_dodge(0.6))+
-    geom_jitter(position=position_jitter(0.6))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
+ggplot(incubation, aes(x=treatment, y=GPP_ugcm2h, color=treatment)) +
+  geom_boxplot(position=position_dodge(0.6))+
+  geom_jitter(position=position_jitter(0.6))+
+  scale_color_manual(values=trtcolors)+
+  facet_wrap(~temperature)+
+  theme_bw()
+
+ggplot(incubation, aes(x=temperature, y=GPP_ugcm2h, color=temperature)) +
+  geom_boxplot(position=position_dodge(0.6))+
+  geom_jitter(position=position_jitter(0.6))+
+  scale_color_manual(values=tempcolors)+
+  facet_wrap(~treatment)+
+  theme_bw()
+
 
 ```
 
@@ -1111,7 +1301,7 @@ ggplot(incubation, aes(x=temperature, y=GPP_ugcm2h, color=treatment)) +
 From our preliminary glance at the data, it looks like GPP might be higher on average in the warmest temperature treatment (16 degrees). As for the nutrients, it the controls have the widest spread in GPP and as a result have the highest mean.
 
 
-```{r GPP ANOVA Type II, echo=FALSE}
+```{r GPP ANOVA Type II, echo=FALSE, tidy=TRUE}
 GPP_Model1 <- lm(GPP_ugcm2h ~  temperature * treatment-1, data=incubation)
 library(emmeans) #Estimated Marginal Means
 emmip(GPP_Model1, temperature ~ treatment)
@@ -1126,70 +1316,73 @@ Anova(GPP_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 #http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
 ```
 
-Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,60)=3.0340, p=0.011710). The tests for the main effects of treatment is not significant, but the effect of temperature is significant (F(2,60)=7.2577, p=0.001504).
+Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,60)=3.0340, p=0.011710). The tests for the main effects of treatment is not significant, but the effect of temperature is significant (F(3,60)=167.7790, p< 0.0001).
 
 After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r GPP qqplots and residuals, echo=FALSE}
+```{r GPP qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(GPP_Model1$res)
 plot(GPP_Model1$fitted,GPP_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(GPP_ugcm2h ~  temperature * treatment, data=incubation)
 ```
 
-Data doesn't fit model assumptions, unfortunately. Let's try a log transformation...
-
-```{r GPP ANOVA Type II Model 2, echo=FALSE}
-incubation <- incubation %>%
-  mutate(log_GPP_ugcm2h = log10(GPP_ugcm2h+1-min(GPP_ugcm2h)),
-         sqrt_GPP = sqrt(GPP_ugcm2h))
-
-         
-GPP_Model2 <- lm(log_GPP_ugcm2h ~  temperature * treatment, data=incubation)
-Anova(GPP_Model2, type=3, contrasts=c("constr.sum","contr.poly"))
-qqnorm(GPP_Model2$res)
-plot(GPP_Model2$fitted,GPP_Model2$res,xlab="Fitted",ylab="Residuals")
-leveneTest(log_GPP_ugcm2h ~  temperature * treatment, data=incubation)
-
-GPP_Model3 <- lm(sqrt_GPP ~  temperature * treatment, data=incubation)
-Anova(GPP_Model3, type=3, contrasts=c("constr.sum","contr.poly"))
-qqnorm(GPP_Model3$res)
-plot(GPP_Model3$fitted,GPP_Model3$res,xlab="Fitted",ylab="Residuals")
-leveneTest(sqrt_GPP ~  temperature * treatment, data=incubation)
-
-```
-
-Neither log or square root transformations help. Will need to try something different. In the mean time, let's look at some pairwise comparisons ANYWAY!
+>Data appear to fit model assumptions
 
 ####GPP - Pairwise comparisons
 
-Pairwise comparsions for each level of temperature. At 8 degrees, there is no difference between treatments. At 12 degrees, the Control is different than all the other nutrient treatments. And at 16 degrees there is no different between treatments.
-```{r GPP pairwise trt x temp , echo=FALSE}
+
+```{r GPP pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_GPP_trtxtemp <- emmeans(GPP_Model1, pairwise ~ treatment | temperature)
 emms_GPP_trtxtemp
 #Pairwise comparsions for each level of temperature
 ```
 
-Pairwise comparsions for each level of nutrient treatment. In the control treatment, there is a difference between 8 and 12 and 8 and 16, but none between 12 and 16. In the nitrogen treatment, there is a different between 8 and 16 ad 12 and 16, but not between 8 and 12. In the P treatment, there are no differences between temperatures. In the NP treatment, there is a difference between 8 and 16 and 12 and 16 but none between 8 and 12. 
-```{r GPP pairwise temp x trt, echo=FALSE}
+>Pairwise comparsions for each level of temperature. At 8 degrees, there is no difference between treatments. At 12 degrees, the Control is different than all the other nutrient treatments. And at 16 degrees there is no difference between treatments.
+
+
+```{r GPP pairwise temp x trt, echo=FALSE, tidy=TRUE}
 emms_GPP_tempxtrt <- emmeans(GPP_Model1, pairwise ~ temperature | treatment)
 emms_GPP_tempxtrt
-#Pairwise comparsions for each level of nutrient treatment
-# cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
-#cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
+
 ```
 
-```{r final GPP figure, echo=FALSE}
-GPP <- ggplot(incubation_summary, aes(x=temperature, y=meanGPP, fill=treatment)) +
-  geom_bar(stat="identity", position="dodge") +
+>Pairwise comparsions for each level of nutrient treatment. In the control treatment, there is a difference between 8 and 12 and 8 and 16, but none between 12 and 16. In the nitrogen treatment, there is a different between 8 and 16 ad 12 and 16, but not between 8 and 12. In the P treatment, there are no differences between temperatures. In the NP treatment, there is a difference between 12 and 16 but none between 8 and 12. 
+
+
+```{r final GPP figure, echo=FALSE, tidy=TRUE}
+
+
+ggplot(incubation_summary, aes(x=treatment, y=meanGPP, fill=treatment)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
   geom_errorbar(aes(ymin=meanGPP-sdGPP, ymax=meanGPP+sdGPP),
                 width=.2,
                 position=position_dodge(0.9))+
-    labs(x="Temperature", y="GPP (mg O2/cm2/h)")+
-  facet_wrap( ~ temperature, ncol=3, scales="free") +
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16) 
-GPP
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y=" (mg O2/cm2/h)", title="GPP")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+
+ggplot(incubation_summary, aes(x=temperature, y=meanGPP, fill=temperature)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=tempcolors,
+                    name="Temperature\ntreatment",
+                    labels=c("8", "12", "16"))+
+  geom_errorbar(aes(ymin=meanGPP-sdGPP, ymax=meanGPP+sdGPP),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ treatment , ncol=4, scales="free_y")+
+  labs(x="",y=" (mg O2/cm2/h)", title="GPP")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
 
 ```
 
@@ -1200,10 +1393,10 @@ GPP
 Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
 
 #### ER - Data table summary
-```{r data table summary all treatments and nutrients ER, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients ER, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 
 incubation_summary %>%
-  select(treatment, temperature, meanER, sdER, n) %>%
+  dplyr::select(treatment, temperature, meanER, sdER, n) %>%
   kable("html", digits=3, caption="Incubation experiment ER data summary: means, standard deviation, and number of replicates per treatment") %>%
   kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = F, position="left", font_size=12)
 ```
@@ -1211,38 +1404,27 @@ incubation_summary %>%
 ####ER - Descriptive statistics and plots
 Here we have some summary statistics for ER. First we are looking at ER by TEMPERTURE and by TREATMENT separately.
 
-```{r histograms of each group ER, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group ER, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(ER_ugcm2h ~ temperature, data=incubation, digits=1, plotit=TRUE)
 Desc(ER_ugcm2h ~ treatment, data=incubation, digits=1, plotit=TRUE)
 
-library(lattice)
 
-histogram(~ ER_ugcm2h | temperature, 
-          data=incubation,
-          layout=c(1,3),
-          col="#3166A9",
-          main="ER by Temperature")
-histogram(~ ER_ugcm2h | treatment, 
-          data=incubation,
-          layout=c(1,4),
-          col="#3166A9",
-          main="ER by Nutrient Treatment")
 # Change stripchart colors by groups
-ggplot(incubation, aes(x=temperature, y=ER_ugcm2h, color=treatment)) +
+ggplot(incubation, aes(x=treatment, y=ER_ugcm2h, color=treatment)) +
    geom_boxplot(position=position_dodge(0.6))+
     geom_jitter(position=position_jitter(0.6))+
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16)
+  scale_color_manual(values=trtcolors)+
+  facet_wrap(~temperature)+
+  theme_bw()
 
 ```
 
 
 #### ER - ANOVA results - with intxn
-From our preliminary glance at the data, it looks like ER might be higher on average in the warmest temperature treatment (16 degrees). As for the nutrients, the control has the widest spread in ER, but the highest mean ER is in the N treatment.
 
 
-```{r ER ANOVA Type II, echo=FALSE}
+```{r ER ANOVA Type II, echo=FALSE, tidy=TRUE}
 ER_Model1 <- lm(ER_ugcm2h ~  temperature * treatment-1, data=incubation)
 library(emmeans) #Estimated Marginal Means
 emmip(ER_Model1, temperature ~ treatment)
@@ -1256,51 +1438,197 @@ Anova(ER_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 #This approach is therefore valid in the presence of significant interactions.
 #http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
 ```
+<From our preliminary glance at the data, it looks like ER might be higher on average in the warmest temperature treatment (16 degrees). As for the nutrients, the control has the widest spread in ER, but the highest mean ER is in the N treatment.
 
-Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,60)=8.9481, p<0.0001). The tests for the main effects of temperature treatment is significant (F(2,60)=63.4, p<0.00001) and so is nutrient treatment (F(3,60)=11.3876, p<0.0001.)
+Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,60)=8.1363, p<0.0001). The tests for the main effects of temperature treatment is significant (F(3,60)=116.1382, p<0.00001) and so is nutrient treatment (F(3,60)=9.5048, p<0.0001.)
 
 After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
 
-```{r ER qqplots and residuals, echo=FALSE}
+```{r ER qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(ER_Model1$res)
 plot(ER_Model1$fitted,ER_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(ER_ugcm2h ~  temperature * treatment, data=incubation)
 ```
 
-Looks like we meet the assumptions of normality so we can move onto pairwise comparisons. 
+>Looks like we meet the assumptions of normality so we can move onto pairwise comparisons. 
 
 ####ER - Pairwise comparisons
 
-Pairwise comparsions for each level of temperature. At 8 degrees, there is a difference between the control and all nutrient treatments, but not between nutrient treatments. At 12 degrees, there is a different between C - N and C - NP. At 16 degrees, there is no statistically significant relationship between nutrient treatments.
-```{r ER pairwise trt x temp , echo=FALSE}
+
+```{r ER pairwise trt x temp , echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_ER_trtxtemp <- emmeans(ER_Model1, pairwise ~ treatment | temperature)
 emms_ER_trtxtemp
 #Pairwise comparsions for each level of temperature
 ```
+>Pairwise comparsions for each level of temperature. At 8 degrees, there is a difference between the control and all nutrient treatments, but not between nutrient treatments. At 12 degrees, there is a different between C - N and C - NP. At 16 degrees, there is no statistically significant relationship between nutrient treatments.
 
-Pairwise comparsions for each level of nutrient treatment. In the control treatment, there is a difference between 8 - 12, 8 - 16, and between 12 - 16. In the N treatment, there is no difference between 8 and 12, but there is a difference between 8 - 16 and 12 - 16. In the P treatment, there is a difference between 8 - 16 and 12- 16. Lastly, in the NP treatment, there is a difference between 8 - 12, 8 - 16, and 12 - 16. 
-```{r ER pairwise temp x trt, echo=FALSE}
+
+```{r ER pairwise temp x trt, echo=FALSE, tidy=TRUE}
 emms_ER_tempxtrt <- emmeans(ER_Model1, pairwise ~ temperature | treatment)
 emms_ER_tempxtrt
 #Pairwise comparsions for each level of nutrient treatment
 # cld(emms_TDN_tempxtrt) # implicitly uses by "temperature"
 #cld(emms_TDN_tempxtrt, by=NULL, Letters= "||||||||", alpha=0.01)
 ```
+>Pairwise comparsions for each level of nutrient treatment. In the control treatment, there is a difference between 8 - 12, 8 - 16, and between 12 - 16. In the N treatment, there is no difference between 8 and 12, but there is a difference between 8 - 16 and 12 - 16. In the P treatment, there is a difference between 8 - 16 and 12- 16. Lastly, in the NP treatment, there is a difference between 8 - 12, 8 - 16, and 12 - 16. 
 
-```{r final ER figure, echo=FALSE}
-ER <- ggplot(incubation_summary, aes(x=temperature, y=meanER, fill=treatment)) +
-  geom_bar(stat="identity", position="dodge") +
+
+```{r final ER figure, echo=FALSE, tidy=TRUE}
+
+ggplot(incubation_summary, aes(x=treatment, y=meanER, fill=treatment)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
   geom_errorbar(aes(ymin=meanER-sdER, ymax=meanER+sdER),
                 width=.2,
                 position=position_dodge(0.9))+
-    labs(x="Temperature", y="ER (mg O2/cm2/h)")+
-  facet_wrap( ~ temperature, ncol=3, scales="free") +
-  scale_color_manual(values=c("#40A339", "#3166A9", "#DE0019", "#82388E"))+
-  theme_classic2(base_size=16) 
-ER
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y=" (mg O2/cm2/h)", title="ER")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+ggplot(incubation_summary, aes(x=temperature, y=meanER, fill=temperature)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=tempcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanER-sdER, ymax=meanER+sdER),
+                width=.2,
+                position=position_dodge(0.9))+
+  facet_wrap( ~ treatment , ncol=4, scales="free_y")+
+  labs(x="",y=" (mg O2/cm2/h)", title="ER")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
 
 ```
+
+
+
+### Data Visualization - NEP (net ecosystem production)
+
+Before we jump into any statistical analyses, just want to get an idea of how things play out by treatment and temperature .
+
+#### NEP - Data table summary
+```{r data table summary all treatments and nutrients NEP, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
+
+incubation_summary %>%
+  dplyr::select(treatment, temperature, meanNEP, sdNEP, n) %>%
+  kable("html", digits=3, caption="Incubation experiment NEP data summary: means, standard deviation, and number of replicates per treatment") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = F, position="left", font_size=12)
+```
+
+####NEP - Descriptive statistics and plots
+Here we have some summary statistics for NEP. First we are looking at NEP by TEMPERTURE and by TREATMENT separately.
+
+```{r histograms of each group NEP, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
+library(DescTools)
+Desc(NEP_ugcm2h ~ temperature, data=incubation, digits=1, plotit=TRUE)
+Desc(NEP_ugcm2h ~ treatment, data=incubation, digits=1, plotit=TRUE)
+
+# Change stripchart colors by groups
+ggplot(incubation, aes(x=treatment, y=NEP_ugcm2h, color=treatment)) +
+  geom_boxplot(position=position_dodge(0.6))+
+  geom_jitter(position=position_jitter(0.6))+
+  scale_color_manual(values=trtcolors)+
+  facet_wrap(~temperature)+
+  theme_bw()
+
+```
+
+
+#### NEP - ANOVA results - with intxn
+From our preliminary glance at the data, it looks like NEP might be higher on average in the warmest temperature treatment (16 degrees). As for the nutrients, it the controls have the widest spread in NEP and as a result have the highest mean.
+
+
+```{r NEP ANOVA Type II, echo=FALSE, tidy=TRUE}
+NEP_Model1 <- lm(NEP_ugcm2h ~  temperature * treatment-1, data=incubation)
+library(emmeans) #Estimated Marginal Means
+emmip(NEP_Model1, temperature ~ treatment)
+emmip(NEP_Model1, treatment~temperature)
+Anova(NEP_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
+
+#First, it is necessary to set the contrasts option in R. Because the multi-way ANOVA model is over-parameterised
+#it is necessary to choose a contrasts setting that sums to zero, otherwise the ANOVA analysis will give incorrect
+#results with respect to the expected hypothesis. (The default contrasts type does not satisfy this requirement.)
+#Doing a Type III test. This type tests for the presence of a main effect after the other main effect and interaction.
+#This approach is therefore valid in the presence of significant interactions.
+#http://goanna.cs.rmit.edu.au/~fscholer/anova.php 
+```
+
+Studying the output of the ANOVA table (Type III SS), we see there is a evidence of a significant interaction effect (F(6,60)=3.0340, p=0.011710). The tests for the main effects of treatment is not significant, but the effect of temperature is significant (F(2,60)=7.2577, p=0.001504).
+
+After fitting an ANOVA model it is important to always check the relevant model assumptions.  This includes making QQ-plots and residual plots. Will use Levene's test of equality of variances too. 
+
+```{r NEP qqplots and residuals, echo=FALSE, tidy=TRUE}
+qqnorm(NEP_Model1$res)
+plot(NEP_Model1$fitted,NEP_Model1$res,xlab="Fitted",ylab="Residuals")
+leveneTest(NEP_ugcm2h ~  temperature * treatment, data=incubation)
+```
+>Data appear to fit model assumptions
+
+####NEP - Pairwise comparisons
+
+
+```{r NEP pairwise trt x temp , echo=FALSE, tidy=TRUE}
+library(emmeans) #Estimated Marginal Means
+emms_NEP_trtxtemp <- emmeans(NEP_Model1, pairwise ~ treatment | temperature)
+emms_NEP_trtxtemp
+#Pairwise comparsions for each level of temperature
+```
+>Pairwise comparsions for each level of temperature. At 8 degrees, there is no difference between treatments. At 12 degrees, the Control is different than all the other nutrient treatments. And at 16 degrees there is no difference between treatments.
+
+
+```{r NEP pairwise temp x trt, echo=FALSE, tidy=TRUE}
+emms_NEP_tempxtrt <- emmeans(NEP_Model1, pairwise ~ temperature | treatment)
+emms_NEP_tempxtrt
+
+```
+>Pairwise comparsions for each level of nutrient treatment. In the control treatment, there is a difference between 8 and 12 and 8 and 16, but none between 12 and 16. In the nitrogen treatment, there is a different between 8 and 16 ad 12 and 16, but not between 8 and 12. In the P treatment, there are no differences between temperatures. In the NP treatment, there is a difference between 12 and 16 but none between 8 and 12. 
+
+
+```{r final NEP figure, echo=FALSE, tidy=TRUE}
+
+
+ggplot(incubation_summary, aes(x=treatment, y=meanNEP, fill=treatment)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=trtcolors,
+                    name="Nutrient\namendment",
+                    labels=c("Control", "Nitrogen", "Phosphorus", "Both (N & P)"))+
+  geom_errorbar(aes(ymin=meanNEP-sdNEP, ymax=meanNEP+sdNEP),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ temperature , ncol=3, scales="free_y")+
+  labs(x="",y=" (mg O2/cm2/h)", title="NEP")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+
+
+ggplot(incubation_summary, aes(x=temperature, y=meanNEP, fill=temperature)) + theme_bw()+
+   geom_bar(color="black",stat="identity", position="dodge") +
+  scale_fill_manual(values=tempcolors,
+                    name="Nutrient\namendment",
+                    labels=c("8 deg C", "12 deg C", "16 deg C"))+
+  geom_errorbar(aes(ymin=meanNEP-sdNEP, ymax=meanNEP+sdNEP),
+                width=.2,
+                position=position_dodge(0.9))+
+  # coord_cartesian(ylim=c(0,0.5))+
+  # scale_y_continuous(breaks=seq(0,0.5,0.1))+
+  facet_wrap( ~ treatment , ncol=4)+
+  labs(x="",y=" (mg O2/cm2/h)", title="NEP")+
+  theme(legend.position="bottom",
+      axis.text.x=element_blank())
+
+
+
+
+```
+
 
 
 
@@ -1308,7 +1636,7 @@ ER
 
 
 ### Data Visualization - Pigments (Chla A)
-```{r load pigment data & maniuplate a little, echo=FALSE, warning=FALSE, message=FALSE}
+```{r load pigment data & maniuplate a little, echo=FALSE, tidy=TRUE, warning=FALSE, message=FALSE}
 TxN.raw <- read.csv("data_clean/TxN_withdilutions.csv")
 TxN.data.trim <- TxN.raw %>%
   filter(!run_ID %in% c("6C", "7C", "8C","5C_rerun")) %>%
@@ -1354,7 +1682,7 @@ TxN.data.trim.wide$temperature <- as.factor(TxN.data.trim.wide$temperature)
 
 ####Chl A Benthic -  Data table summary
 The main thing to notice here compared to the other data is that our sample size is small (n=3 per trt combo)
-```{r data table summary all treatments and nutrients pigments, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients pigments, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 TxN.data.summary %>%
   select(treatment, temperature, mean_ug_cm2, sd_mass_ug_cm2, n) %>%
   filter(pigment_ID=="chla") %>%
@@ -1363,7 +1691,7 @@ TxN.data.summary %>%
 ```
 
 ####Chl A Benethic- Descriptive statistics and plots
-```{r histograms of each group ChlA, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group ChlA, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(chla ~ temperature, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
 Desc(chla ~ treatment, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
@@ -1390,7 +1718,7 @@ ggplot(TxN.data.trim.wide, aes(x=temperature, y=chla, color=treatment)) +
 ```
 
 #### Chl A Benthic - ANOVA results - with intxn
-```{r chl A ANOVA Type III, echo=FALSE}
+```{r chl A ANOVA Type III, echo=FALSE, tidy=TRUE}
 ChlA_Model1 <- lm(chla ~  temperature * treatment, data=TxN.data.trim.wide)
 library(emmeans) #Estimated Marginal Means
 emmip(ChlA_Model1, temperature ~ treatment)
@@ -1407,7 +1735,7 @@ Anova(ChlA_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 
 Studying the output of the ANOVA table (Type III SS), <<womp womp>> it only thing that is significant is the intercept...whatever that means. 
 
-```{r CHLA qqplots and residuals, echo=FALSE}
+```{r CHLA qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(ChlA_Model1$res)
 plot(ChlA_Model1$fitted,ChlA_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(chla ~  temperature * treatment, data=TxN.data.trim.wide)
@@ -1419,7 +1747,7 @@ Looks like we meet the assumptions of normality, but no need to move onto pairwi
 ###Data Visualization - Pigments (Chl B)
 ####Chl B -  Data table summary
 The main thing to notice here compared to the other data is that our sample size is small (n=3 per trt combo)
-```{r data table summary all treatments and nutrients pigments CHLB, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients pigments CHLB, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 TxN.data.summary %>%
   select(treatment, temperature, mean_ug_cm2, sd_mass_ug_cm2, n) %>%
   filter(pigment_ID=="chlb") %>%
@@ -1428,7 +1756,7 @@ TxN.data.summary %>%
 ```
 
 ####Chl B - Descriptive statistics and plots
-```{r histograms of each group ChlB, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group ChlB, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(chlb ~ temperature, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
 Desc(chlb ~ treatment, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
@@ -1455,7 +1783,7 @@ ggplot(TxN.data.trim.wide, aes(x=temperature, y=chlb, color=treatment)) +
 ```
 
 #### Chl B - ANOVA results - with intxn
-```{r chl B ANOVA Type III, echo=FALSE}
+```{r chl B ANOVA Type III, echo=FALSE, tidy=TRUE}
 ChlB_Model1 <- lm(chlb ~  temperature * treatment, data=TxN.data.trim.wide)
 library(emmeans) #Estimated Marginal Means
 emmip(ChlB_Model1, temperature ~ treatment)
@@ -1472,7 +1800,7 @@ Anova(ChlB_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 
 Studying the output of the ANOVA table (Type III SS), <<womp womp>> nothing is significantly different.
 
-```{r Chlb qqplots and residuals, echo=FALSE}
+```{r Chlb qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(ChlB_Model1$res)
 plot(ChlB_Model1$fitted,ChlA_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(chlb ~  temperature * treatment, data=TxN.data.trim.wide)
@@ -1484,7 +1812,7 @@ Looks like we meet the assumptions of normality, but no need to move onto pairwi
 ###Data Visualization - Percent Green (Chlb/Chla)
 ####Percent Green -  Data table summary
 The main thing to notice here compared to the other data is that our sample size is small (n=3 per trt combo)
-```{r data table summary all treatments and nutrients pigments perc green, echo=FALSE, message=FALSE, warning=FALSE}
+```{r data table summary all treatments and nutrients pigments perc green, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 TxN.data.summary %>%
   select(treatment, temperature, mean_ug_cm2, sd_mass_ug_cm2, n) %>%
   filter(pigment_ID=="perc_green") %>%
@@ -1493,7 +1821,7 @@ TxN.data.summary %>%
 ```
 
 ####Percent Green - Descriptive statistics and plots
-```{r histograms of each group perc_green, echo=FALSE, message=FALSE, warning=FALSE}
+```{r histograms of each group perc_green, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 library(DescTools)
 Desc(perc_green ~ temperature, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
 Desc(perc_green ~ treatment, data=TxN.data.trim.wide, digits=1, plotit=TRUE)
@@ -1520,7 +1848,7 @@ ggplot(TxN.data.trim.wide, aes(x=temperature, y=perc_green, color=treatment)) +
 ```
 
 #### Chl B - ANOVA results - with intxn
-```{r perc_green ANOVA Type III, echo=FALSE}
+```{r perc_green ANOVA Type III, echo=FALSE, tidy=TRUE}
 PercGreen_Model1 <- lm(perc_green ~  temperature * treatment, data=TxN.data.trim.wide)
 library(emmeans) #Estimated Marginal Means
 emmip(PercGreen_Model1, temperature ~ treatment)
@@ -1537,7 +1865,7 @@ Anova(PercGreen_Model1, type=3, contrasts=c("constr.sum","contr.poly"))
 
 Studying the output of the ANOVA table (Type III SS), <<womp womp>> nothing is significantly different.
 
-```{r perc_Green qqplots and residuals, echo=FALSE}
+```{r perc_Green qqplots and residuals, echo=FALSE, tidy=TRUE}
 qqnorm(PercGreen_Model1$res)
 plot(PercGreen_Model1$fitted,ChlA_Model1$res,xlab="Fitted",ylab="Residuals")
 leveneTest(perc_green ~  temperature * treatment, data=TxN.data.trim.wide)
@@ -1546,7 +1874,7 @@ leveneTest(perc_green ~  temperature * treatment, data=TxN.data.trim.wide)
 Looks like we meet the assumptions of normality, but no need to move onto pairwise comparisons. 
 
 ###Data Visualization - Rare Benthic pigments (fuco, aphan)
-```{r rare benthic pigments, echo=FALSE}
+```{r rare benthic pigments, echo=FALSE, tidy=TRUE}
 TxN.data.rare.pigs <- TxN.raw %>%
   filter(!run_ID %in% c("6C", "7C", "8C","5C_rerun")) %>%
   filter(temperature %in% c("12","16"))%>%
@@ -1566,7 +1894,7 @@ stripchart(fuco ~ treatment, TxN.data.rare.pigs.wide, vertical=TRUE,
 
 ## Correlations between Nutrients & Functional Responses
 
-```{r combine nutrients and assays, echo=FALSE, message=FALSE, warning=FALSE}
+```{r combine nutrients and assays, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
 incubation_merge <- incubation %>%
   select(treatment, temperature, sample_id, rep, NEP_ugcm2h, ER_ugcm2h, GPP_ugcm2h)
 expchem_merge <- expchem_trim %>%
@@ -1584,7 +1912,7 @@ incubation_corr_NAfree <- na.omit(incubation_corr)
 glimpse(incubation_corr)
 ```
 
-```{r correlations GPP and nutrients, echo=FALSE, warning=FALSE, message=FALSE}
+```{r correlations GPP and nutrients, echo=FALSE, tidy=TRUE, warning=FALSE, message=FALSE}
  library(GGally)
 # pm <- ggpairs(incubation_corr, columns = c("GPP_ugcm2h","ER_ugcm2h","changePO4_uM","changeTDN_uM","changeNH4_mgL","chl_a_phyto"),
 #                 lower = list(
@@ -1648,7 +1976,7 @@ assay
 
 
 ####Subplots from correlation matrices
-```{r more correlation plots, echo=FALSE, warning=FALSE, message=FALSE}
+```{r more correlation plots, echo=FALSE, tidy=TRUE, warning=FALSE, message=FALSE}
 chlb.GPP.corr=cor.test(incubation_corr_NAfree$GPP_ugcm2h,incubation_corr_NAfree$chlb, method="pearson")
 chlb.GPP.corr$estimate
 chlb.GPP.plot <- ggplot(incubation_corr_NAfree, aes(x=chlb, y=GPP_ugcm2h)) + geom_point(shape=1) +
@@ -1861,7 +2189,7 @@ NH4.ER.plot
 ##Pelagic/Benthic Response Ratios
 
 ###Benthic Response Ratios first
-```{r response ratios data wrangling, echo=FALSE}
+```{r response ratios data wrangling, echo=FALSE, tidy=TRUE}
 #Didn't get anywhere by looking at the response ratios of benthi chl a and benthic chl b
 
 incubation_corr_NAfree <- incubation_corr_NAfree %>%
@@ -1891,7 +2219,7 @@ ggplot(incubation_corr_NAfree, aes(x=temperature, y=BPratio, fill=treatment)) +
 
 Lower B:P means less benthic biomass relative to planktonic biomass
 
-```{r ANOVA B:P, echo=FALSE}
+```{r ANOVA B:P, echo=FALSE, tidy=TRUE}
 BP_Model1 <- lm(BPratio ~  temperature * treatment, data=incubation_corr_NAfree)
 library(emmeans) #Estimated Marginal Means
 emmip(BP_Model1, temperature ~ treatment)
@@ -1905,7 +2233,7 @@ leveneTest(BPratio ~  temperature * treatment, data=incubation_corr_NAfree)
 
 
 Pairwise comparsions for each level of temperature. Only at 16 degrees C do we see a difference between C & NP. 
-```{r GPP pairwise trt x temp 2, echo=FALSE}
+```{r GPP pairwise trt x temp 2, echo=FALSE, tidy=TRUE}
 library(emmeans) #Estimated Marginal Means
 emms_BP_trtxtemp <- emmeans(BP_Model1, pairwise ~ treatment | temperature)
 emms_BP_trtxtemp
